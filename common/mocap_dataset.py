@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from common.quaternion import qeuler_np, qfix
 
+
 class MocapDataset:
     def __init__(self, path, skeleton, fps):
         self._data = self._load(path)
@@ -109,31 +110,25 @@ class MocapDataset:
                 # Absolute translations across the XY plane are removed here
                 trajectory[:, :, [0, 2]] = 0
                 action['positions_local'] = self._skeleton.forward_kinematics(rotations, trajectory).squeeze(0).cpu().numpy()
-                
-        
+
     def __getitem__(self, key):
         return self._data[key]
-    
-        
+
     def subjects(self):
         return self._data.keys()
-    
-        
+
     def subject_actions(self, subject):
         return self._data[subject].keys()
-        
-        
+
     def all_actions(self):
         result = []
         for subject, actions in self._data.items():
             for action in actions.keys():
                 result.append((subject, action))
         return result
-    
-    
+
     def fps(self):
         return self._fps
-    
-    
+
     def skeleton(self):
         return self._skeleton

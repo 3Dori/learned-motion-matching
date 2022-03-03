@@ -4,7 +4,7 @@ from torch import optim, nn
 import torch.cuda
 
 from autoencoder import Autoencoder
-from learned_motion_AE import Compressor, Decompressor
+from networks.learned_motion_AE import Compressor, Decompressor
 from data import CMUDataset, UE4DataSet
 
 

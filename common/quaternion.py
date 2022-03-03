@@ -96,6 +96,19 @@ def qeuler(q, order, epsilon=0):
 
     return torch.stack((x, y, z), dim=1).view(original_shape)
 
+
+def qconj(q):
+    assert q.shape[-1] == 4
+    return torch.tensor([1, -1, -1, -1]) * q
+
+
+def angular_velocity(q, fps):
+    # See https://blog.csdn.net/zhoupian/article/details/96974091
+    assert q.shape[-1] == 4
+
+    q_conj = qconj(q[1:])
+    return 2 * qmul(torch.diff(q, axis=0), q_conj) * fps
+
 # Numpy-backed implementations
 
 def qmul_np(q, r):
@@ -115,6 +128,46 @@ def qeuler_np(q, order, epsilon=0, use_gpu=False):
     else:
         q = torch.from_numpy(q).contiguous()
         return qeuler(q, order, epsilon).numpy()
+
+
+def angular_velocity_np(q, fps):
+    q = torch.from_numpy(q).contiguous()
+    return angular_velocity(q, fps).numpy()
+
+
+def log(x, eps=1e-5):
+    length = np.sqrt(np.sum(np.square(x[..., 1:]), axis=-1))[..., np.newaxis]
+    halfangle = np.where(length < eps, np.ones_like(length), np.arctan2(length, x[..., 0:1]) / length)
+    return halfangle * x[..., 1:]
+
+
+def to_scaled_angle_axis_np(x, eps=1e-5):
+    return 2.0 * log(x, eps)
+
+
+def _fast_cross(a, b):
+    return np.concatenate([
+        a[...,1:2]*b[...,2:3] - a[...,2:3]*b[...,1:2],
+        a[...,2:3]*b[...,0:1] - a[...,0:1]*b[...,2:3],
+        a[...,0:1]*b[...,1:2] - a[...,1:2]*b[...,0:1]], axis=-1)
+
+
+def fk_vel(lrot, lpos, lvel, lang, parents):
+    gp, gr, gv, ga = [lpos[..., :1, :]], [lrot[..., :1, :]], [lvel[..., :1, :]], [lang[..., :1, :]]
+    for i in range(1, len(parents)):
+        gp.append(qrot_np(gr[parents[i]], lpos[..., i:i + 1, :]) + gp[parents[i]])
+        gr.append(qmul_np(gr[parents[i]], lrot[..., i:i + 1, :]))
+        gv.append(qrot_np(gr[parents[i]], lvel[..., i:i + 1, :]) +
+                  _fast_cross(ga[parents[i]], qmul_np(gr[parents[i]], lpos[..., i:i + 1, :])) +
+                  gv[parents[i]])
+        ga.append(qmul_np(gr[parents[i]], lang[..., i:i + 1, :]) + ga[parents[i]])
+
+    return (
+        np.concatenate(gr, axis=-2),
+        np.concatenate(gp, axis=-2),
+        np.concatenate(gv, axis=-2),
+        np.concatenate(ga, axis=-2))
+
 
 def qfix(q):
     """
