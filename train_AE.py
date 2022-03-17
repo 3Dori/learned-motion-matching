@@ -1,11 +1,16 @@
+import torch.cuda
+
 from long_term.dataset_locomotion import dataset, actions_valid
-from long_term.locomotion_utils import build_extra_features, build_input_features, compute_velocities
+from long_term.locomotion_utils import build_extra_features, compute_input_features, compute_output_features
 
 
 if __name__ == '__main__':
     prefix_length = 30
     target_length = 60
     future_trajectory_length = 60
+
+    if torch.cuda.is_available():
+        dataset.cuda()
 
     sequences_train = []
     sequences_valid = []
@@ -29,7 +34,8 @@ if __name__ == '__main__':
     print('%d sequences were discarded for being too short.' % n_discarded)
     print('Training on %d sequences, validating on %d sequences.' % (len(sequences_train), len(sequences_valid)))
     dataset.compute_positions()
-    compute_velocities(dataset)
+    dataset.compute_velocities()
     build_extra_features(dataset)
-    build_input_features(dataset)
+    compute_input_features(dataset)
+    compute_output_features(dataset)
     print('Done')

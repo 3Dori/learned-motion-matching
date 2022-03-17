@@ -8,6 +8,7 @@
 import numpy as np
 import torch
 from common.quaternion import qeuler_np, qfix
+from long_term.locomotion_utils import compute_bone_positions, compute_bone_velocities
 
 
 class MocapDataset:
@@ -34,7 +35,8 @@ class MocapDataset:
             
             result[subject][action] = {
                 'rotations': rotations,
-                'trajectory': trajectory
+                'trajectory': trajectory,
+                'n_frames': rotations.shape[0]
             }
         return result
         
@@ -100,16 +102,12 @@ class MocapDataset:
     def compute_positions(self):
         for subject in self._data.values():
             for action in subject.values():
-                rotations = torch.from_numpy(action['rotations'].astype('float32')).unsqueeze(0)
-                trajectory = torch.from_numpy(action['trajectory'].astype('float32')).unsqueeze(0)
-                if self._use_gpu:
-                    rotations = rotations.cuda()
-                    trajectory = trajectory.cuda()
-                action['positions_world'] = self._skeleton.forward_kinematics(rotations, trajectory).squeeze(0).cpu().numpy()
-                
-                # Absolute translations across the XY plane are removed here
-                trajectory[:, :, [0, 2]] = 0
-                action['positions_local'] = self._skeleton.forward_kinematics(rotations, trajectory).squeeze(0).cpu().numpy()
+                compute_bone_positions(action, self._skeleton)
+
+    def compute_velocities(self):
+        for subject in self._data.values():
+            for action in subject.values():
+                compute_bone_velocities(action, self._fps)
 
     def __getitem__(self, key):
         return self._data[key]
