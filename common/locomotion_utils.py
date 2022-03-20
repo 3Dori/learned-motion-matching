@@ -37,10 +37,14 @@ Y_LEN = ((N_BONES-1) * 3 +
          3 +
          3)
 
+Y_OFFSETS = [0, 75, 225, 300, 375, 378, 381]
+
 Q_LEN = ((N_BONES-1) * 3 +
          (N_BONES-1) * 6 +
          (N_BONES-1) * 3 +
          (N_BONES-1) * 3)
+
+Q_OFFSETS = [0, 75, 225, 300, 375]
 
 
 def build_phase_track(positions_world):
@@ -160,7 +164,7 @@ def _future_facing_direction_at_frame(facing_direction, frame):
 
 
 def _build_input_feature_vector_for_action(action):
-    input_feature = np.zeros((action['n_frames'], X_LEN))
+    input_feature = np.zeros((action['n_frames'], X_LEN), dtype=np.float32)
 
     # future trajectory
     positions_world = action['positions_world']
@@ -190,7 +194,14 @@ def _build_input_feature_vector_for_action(action):
 
 def _std(mean, sum2, n):
     std = np.sqrt(sum2 / n - mean ** 2)
-    std = np.where(std <= 0, np.ones_like(std), std)
+    return std
+
+
+def _std_y_feature(sum_, sum2, n, start, end):
+    sum_ = sum_[start:end].sum()
+    sum2 = sum2[start:end].sum()
+    mean = sum_ / (n * (end - start))
+    std = np.sqrt(sum2 / (n * (end - start)) - mean ** 2)
     return std
 
 
@@ -225,13 +236,13 @@ def compute_input_features(dataset):
 
     for subject in dataset.subjects():
         for action in dataset[subject].values():
-            action['input_feature'] = (action['input_feature'] - dataset.input_mean) / dataset.input_scale
+            action['input_feature'] = ((action['input_feature'] - dataset.input_mean) / dataset.input_scale).astype(np.float32)
 
 
 def _build_output_vector_for_action(action, parents):
     n_frames = action['n_frames']
-    Y_feature = np.zeros((n_frames, Y_LEN))
-    Q_feature = np.zeros((n_frames, Q_LEN))
+    Y_feature = np.zeros((n_frames, Y_LEN), dtype=np.float32)
+    Q_feature = np.zeros((n_frames, Q_LEN), dtype=np.float32)
 
     Ypos = action['positions_local']
     Yrot = action['rotations']
@@ -255,12 +266,12 @@ def _build_output_vector_for_action(action, parents):
     Qxfm = to_xform_np(Qrot)
     # Qtxy = to_xform_xy_np(Qrot)
     Qtxy = Qxfm[:, :, :, :2]
-    action['Qrot'] = Qrot
-    action['Qpos'] = Qpos
-    action['Qvel'] = Qvel
-    action['Qang'] = Qang
-    action['Qtxy'] = Qtxy
-    action['Qxfm'] = Qxfm
+    action['Qrot'] = Qrot.astype(np.float32)
+    action['Qpos'] = Qpos.astype(np.float32)
+    action['Qvel'] = Qvel.astype(np.float32)
+    action['Qang'] = Qang.astype(np.float32)
+    action['Qtxy'] = Qtxy.astype(np.float32)
+    action['Qxfm'] = Qxfm.astype(np.float32)
 
     Q_feature[:, 0:75] = Qpos[:, 1:].reshape((n_frames, -1))
     Q_feature[:, 75:225] = Qtxy[:, 1:].reshape((n_frames, -1))
@@ -276,6 +287,8 @@ def compute_output_features(dataset):
         for action in dataset[subject].values():
             action['Y_feature'], action['Q_feature'] = _build_output_vector_for_action(action, parents)
 
+    dataset.Y_compressor_scale = np.zeros(Y_LEN)
+    dataset.Q_compressor_scale = np.zeros(Q_LEN)
     # normalize
     Y_sum = np.zeros(Y_LEN)
     Y_sum2 = np.zeros(Y_LEN)
@@ -289,13 +302,19 @@ def compute_output_features(dataset):
             Q_sum2 += (action['Q_feature'] ** 2).sum(axis=0)
     dataset.Y_mean = Y_sum / dataset.n_total_frames
     dataset.Q_mean = Q_sum / dataset.n_total_frames
-    dataset.Y_scale = _std(mean=dataset.Y_mean, sum2=Y_sum2, n=dataset.n_total_frames)
-    dataset.Q_scale = _std(mean=dataset.Q_mean, sum2=Q_sum2, n=dataset.n_total_frames)
+    for start, end in zip(Y_OFFSETS, Y_OFFSETS[1:]):
+        std = _std_y_feature(Y_sum, Y_sum2, dataset.n_total_frames, start, end)
+        dataset.Y_compressor_scale[start:end] = std
+    for start, end in zip(Q_OFFSETS, Q_OFFSETS[1:]):
+        std = _std_y_feature(Q_sum, Q_sum2, dataset.n_total_frames, start, end)
+        dataset.Q_compressor_scale[start:end] = std
+    dataset.Y_decompressor_scale = _std(mean=dataset.Y_mean, sum2=Y_sum2, n=dataset.n_total_frames).astype(np.float32)
+    dataset.Q_decompressor_scale = _std(mean=dataset.Q_mean, sum2=Q_sum2, n=dataset.n_total_frames).astype(np.float32)
 
     for subject in dataset.subjects():
         for action in dataset[subject].values():
-            action['Y_feature'] = (action['Y_feature'] - dataset.Y_mean) / dataset.Y_scale
-            action['Q_feature'] = (action['Q_feature'] - dataset.Q_mean) / dataset.Q_scale
+            action['Y_feature'] = ((action['Y_feature'] - dataset.Y_mean) / dataset.Y_compressor_scale).astype(np.float32)
+            action['Q_feature'] = ((action['Q_feature'] - dataset.Q_mean) / dataset.Q_compressor_scale).astype(np.float32)
 
 
 def angle_difference_batch(y, x):

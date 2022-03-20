@@ -124,10 +124,12 @@ def qmul_np(q, r):
     r = torch.from_numpy(r).contiguous()
     return qmul(q, r).numpy()
 
+
 def qrot_np(q, v):
     q = torch.from_numpy(q).contiguous()
     v = torch.from_numpy(v).contiguous()
     return qrot(q, v).numpy()
+
 
 def qeuler_np(q, order, epsilon=0, use_gpu=False):
     if use_gpu:
@@ -149,8 +151,19 @@ def log(q, eps=1e-5):
     return halfangle * q[..., 1:]
 
 
+def exp(x, eps=1e-5):
+    halfangle = np.sqrt(np.sum(np.square(x), axis=-1))[..., np.newaxis]
+    c = np.where(halfangle < eps, np.ones_like(halfangle), np.cos(halfangle))
+    s = np.where(halfangle < eps, np.ones_like(halfangle), np.sinc(halfangle / np.pi))
+    return np.concatenate([c, s * x], axis=-1)
+
+
 def to_scaled_angle_axis_np(q, eps=1e-5):
     return 2.0 * log(q, eps)
+
+
+def from_scaled_angle_axis_np(x, eps=1e-5):
+    return exp(x / 2.0, eps)
 
 
 def to_xform_xy_np(q):
@@ -184,6 +197,77 @@ def to_xform_np(q):
         np.concatenate([xz - wy, yz + wx, 1.0 - (xx + yy)], axis=-1)[..., np.newaxis, :],
     ], axis=-2)
 
+
+def from_xform_xy_np(x):
+    c2 = _fast_cross_np(x[..., 0], x[..., 1])
+    c2 = c2 / np.sqrt(np.sum(np.square(c2), axis=-1))[..., np.newaxis]
+    c1 = _fast_cross_np(c2, x[..., 0])
+    c1 = c1 / np.sqrt(np.sum(np.square(c1), axis=-1))[..., np.newaxis]
+    c0 = x[..., 0]
+
+    return from_xform_np(np.concatenate([
+        c0[..., np.newaxis],
+        c1[..., np.newaxis],
+        c2[..., np.newaxis]], axis=-1))
+
+
+def length(x):
+    return np.sqrt(np.sum(x * x, axis=-1))
+
+
+def normalize(x, eps=1e-8):
+    return x / (length(x)[..., np.newaxis] + eps)
+
+
+def from_xform_np(ts):
+    return normalize(
+        np.where((ts[..., 2, 2] < 0.0)[..., np.newaxis],
+                 np.where((ts[..., 0, 0] > ts[..., 1, 1])[..., np.newaxis],
+                          np.concatenate([
+                              (ts[..., 2, 1] - ts[..., 1, 2])[..., np.newaxis],
+                              (1.0 + ts[..., 0, 0] - ts[..., 1, 1] - ts[..., 2, 2])[..., np.newaxis],
+                              (ts[..., 1, 0] + ts[..., 0, 1])[..., np.newaxis],
+                              (ts[..., 0, 2] + ts[..., 2, 0])[..., np.newaxis]], axis=-1),
+                          np.concatenate([
+                              (ts[..., 0, 2] - ts[..., 2, 0])[..., np.newaxis],
+                              (ts[..., 1, 0] + ts[..., 0, 1])[..., np.newaxis],
+                              (1.0 - ts[..., 0, 0] + ts[..., 1, 1] - ts[..., 2, 2])[..., np.newaxis],
+                              (ts[..., 2, 1] + ts[..., 1, 2])[..., np.newaxis]], axis=-1)),
+                 np.where((ts[..., 0, 0] < -ts[..., 1, 1])[..., np.newaxis],
+                          np.concatenate([
+                              (ts[..., 1, 0] - ts[..., 0, 1])[..., np.newaxis],
+                              (ts[..., 0, 2] + ts[..., 2, 0])[..., np.newaxis],
+                              (ts[..., 2, 1] + ts[..., 1, 2])[..., np.newaxis],
+                              (1.0 - ts[..., 0, 0] - ts[..., 1, 1] + ts[..., 2, 2])[..., np.newaxis]], axis=-1),
+                          np.concatenate([
+                              (1.0 + ts[..., 0, 0] + ts[..., 1, 1] + ts[..., 2, 2])[..., np.newaxis],
+                              (ts[..., 2, 1] - ts[..., 1, 2])[..., np.newaxis],
+                              (ts[..., 0, 2] - ts[..., 2, 0])[..., np.newaxis],
+                              (ts[..., 1, 0] - ts[..., 0, 1])[..., np.newaxis]], axis=-1))))
+
+
+def to_euler_np(x, order='xyz'):
+    q0 = x[..., 0:1]
+    q1 = x[..., 1:2]
+    q2 = x[..., 2:3]
+    q3 = x[..., 3:4]
+
+    if order == 'xyz':
+
+        return np.concatenate([
+            np.arctan2(2 * (q0 * q1 + q2 * q3), 1 - 2 * (q1 * q1 + q2 * q2)),
+            np.arcsin((2 * (q0 * q2 - q3 * q1)).clip(-1, 1)),
+            np.arctan2(2 * (q0 * q3 + q1 * q2), 1 - 2 * (q2 * q2 + q3 * q3))], axis=-1)
+
+    elif order == 'yzx':
+
+        return np.concatenate([
+            np.arctan2(2 * (q1 * q0 - q2 * q3), -q1 * q1 + q2 * q2 - q3 * q3 + q0 * q0),
+            np.arctan2(2 * (q2 * q0 - q1 * q3), q1 * q1 - q2 * q2 - q3 * q3 + q0 * q0),
+            np.arcsin((2 * (q1 * q2 + q3 * q0)).clip(-1, 1))], axis=-1)
+
+    else:
+        raise NotImplementedError('Cannot convert from ordering %s' % order)
 
 
 def from_xy(x):

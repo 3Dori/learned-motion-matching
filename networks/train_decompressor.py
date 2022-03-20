@@ -1,6 +1,8 @@
 import sys
 
+from common.visualization import generate_animation
 from networks.learned_motion_AE import Compressor, Decompressor
+from networks.utils import extract_locomotion_from_y_feature_vector
 from common.quaternion import from_xy, fk_vel
 import common.locomotion_utils as utils
 
@@ -17,21 +19,21 @@ class DecompressorTrainer(object):
 
     @staticmethod
     def prepare_batches(dataset, batch_size, window, sequences):
-        buffer_x = np.zeros((batch_size, window, utils.X_LEN))
-        buffer_y = np.zeros((batch_size, window, utils.Y_LEN))
-        buffer_q = np.zeros((batch_size, window, utils.Q_LEN))
+        buffer_x = np.zeros((batch_size, window, utils.X_LEN), dtype=np.float32)
+        buffer_y = np.zeros((batch_size, window, utils.Y_LEN), dtype=np.float32)
+        buffer_q = np.zeros((batch_size, window, utils.Q_LEN), dtype=np.float32)
         # buffer for root (ground) locomotion
-        buffer_y_gnd_pos = np.zeros((batch_size, window, utils.N_BONES, 3))
-        buffer_y_gnd_txy = np.zeros((batch_size, window, utils.N_BONES, 3, 2))
-        buffer_y_gnd_vel = np.zeros((batch_size, window, utils.N_BONES, 3))
-        buffer_y_gnd_ang = np.zeros((batch_size, window, utils.N_BONES, 3))
-        buffer_y_gnd_rvel = np.zeros((batch_size, window, 3))
-        buffer_y_gnd_rang = np.zeros((batch_size, window, 3))
+        buffer_y_gnd_pos = np.zeros((batch_size, window, utils.N_BONES, 3), dtype=np.float32)
+        buffer_y_gnd_txy = np.zeros((batch_size, window, utils.N_BONES, 3, 2), dtype=np.float32)
+        buffer_y_gnd_vel = np.zeros((batch_size, window, utils.N_BONES, 3), dtype=np.float32)
+        buffer_y_gnd_ang = np.zeros((batch_size, window, utils.N_BONES, 3), dtype=np.float32)
+        buffer_y_gnd_rvel = np.zeros((batch_size, window, 3), dtype=np.float32)
+        buffer_y_gnd_rang = np.zeros((batch_size, window, 3), dtype=np.float32)
 
-        buffer_q_gnd_pos = np.zeros((batch_size, window, utils.N_BONES, 3))
-        buffer_q_gnd_vel = np.zeros((batch_size, window, utils.N_BONES, 3))
-        buffer_q_gnd_ang = np.zeros((batch_size, window, utils.N_BONES, 3))
-        buffer_q_gnd_xfm = np.zeros((batch_size, window, utils.N_BONES, 3, 3))
+        buffer_q_gnd_pos = np.zeros((batch_size, window, utils.N_BONES, 3), dtype=np.float32)
+        buffer_q_gnd_vel = np.zeros((batch_size, window, utils.N_BONES, 3), dtype=np.float32)
+        buffer_q_gnd_ang = np.zeros((batch_size, window, utils.N_BONES, 3), dtype=np.float32)
+        buffer_q_gnd_xfm = np.zeros((batch_size, window, utils.N_BONES, 3, 3), dtype=np.float32)
 
         probs = []
         for i, (subject, action) in enumerate(sequences):
@@ -63,17 +65,6 @@ class DecompressorTrainer(object):
                    buffer_y_gnd_pos, buffer_y_gnd_txy, buffer_y_gnd_vel, buffer_y_gnd_ang, buffer_y_gnd_rvel, buffer_y_gnd_rang,
                    buffer_q_gnd_pos, buffer_q_gnd_vel, buffer_q_gnd_ang, buffer_q_gnd_xfm)
 
-    @staticmethod
-    def extract_locomotion_from_y_feature_vector(y, batch_size, window):
-        Ypos = y[:, :, 0:75].reshape((batch_size, window, 25, 3))
-        Ytxy = y[:, :, 75:225].reshape((batch_size, window, 25, 6))
-        Yvel = y[:, :, 225:300].reshape((batch_size, window, 25, 3))
-        Yang = y[:, :, 300:375].reshape((batch_size, window, 25, 3))
-        Yrvel = y[:, :, 375:378].reshape((batch_size, window, 3))
-        Yrang = y[:, :, 378:381].reshape((batch_size, window, 3))
-
-        return Ypos, Ytxy, Yvel, Yang, Yrvel, Yrang
-
     def train(
             self, dataset, batch_size=32, window=2, epochs=10000, lr=0.001,
             w_loc_pos=75.0,
@@ -93,7 +84,7 @@ class DecompressorTrainer(object):
             w_sreg=0.1,
             w_lreg=0.1,
             w_vreg=0.01,
-            seed=1234
+            seed=0
     ):
         compressor = Compressor(input_size=utils.Y_LEN + utils.Q_LEN,
                                 output_size=self.z_len,
@@ -124,6 +115,9 @@ class DecompressorTrainer(object):
         np.random.seed(seed)
         torch.manual_seed(seed)
 
+        Y_mean = torch.tensor(dataset.Y_mean, dtype=torch.float32).to(self.device)
+        Y_decompressor_scale = torch.tensor(dataset.Y_decompressor_scale, dtype=torch.float32).to(self.device)
+
         for epoch in range(epochs):
             optimizer.zero_grad()
 
@@ -145,11 +139,11 @@ class DecompressorTrainer(object):
             Qgnd_xfm = torch.tensor(Qgnd_xfm).to(self.device)
 
             # encode
-            z = compressor((torch.cat([y, q], dim=-1)))
+            z = compressor((torch.cat([y, q], dim=-1)))    # y and q have been normalized
             # decode
-            y_out = decompressor((torch.cat([x, z], dim=-1))) * dataset.y_scale + dataset.y_mean
+            y_out = decompressor((torch.cat([x, z], dim=-1))) * Y_decompressor_scale + Y_mean
 
-            Ypos, Ytxy, Yvel, Yang, Yrvel, Yrang = self.extract_locomotion_from_y_feature_vector(y_out, batch_size, window)
+            Ypos, Ytxy, Yvel, Yang, Yrvel, Yrang = extract_locomotion_from_y_feature_vector(y_out, batch_size, window)
             Ypos = torch.cat([Ygnd_pos[:, :, 0:1], Ypos], dim=2)
             Ytxy = torch.cat([Ygnd_txy[:, :, 0:1], Ytxy], dim=2)
             Yvel = torch.cat([Ygnd_vel[:, :, 0:1], Yvel], dim=2)
@@ -227,6 +221,9 @@ class DecompressorTrainer(object):
 
             if epoch % 10 == 0:
                 sys.stdout.write('\rIter: %7i Loss: %5.3f' % (epoch, rolling_loss))
+
+            if epoch % 1000 == 0:
+                generate_animation(dataset, dataset['S1']['jog_1_d0'], compressor, decompressor, self.device)
 
             if epoch % 1000 == 0:
                 scheduler.step()
