@@ -13,6 +13,7 @@ from long_term.locomotion_utils import compute_bone_positions, compute_bone_velo
 
 class MocapDataset:
     def __init__(self, path, skeleton, fps):
+        self.n_total_frames = 0
         self._data = self._load(path)
         self._fps = fps
         self._use_gpu = False
@@ -36,7 +37,6 @@ class MocapDataset:
             result[subject][action] = {
                 'rotations': rotations,
                 'trajectory': trajectory,
-                'n_frames': rotations.shape[0]
             }
         return result
         
@@ -57,6 +57,9 @@ class MocapDataset:
                     tup = {}
                     for k in self._data[subject][action].keys():
                         tup[k] = self._data[subject][action][k][idx::factor]
+                    tup['rotations'] = tup['rotations'].astype(np.float32)
+                    tup['n_frames'] = tup['rotations'].shape[0]
+                    self.n_total_frames += tup['n_frames']
                     new_actions[action + '_d' + str(idx)] = tup
                     if not keep_strides:
                         break

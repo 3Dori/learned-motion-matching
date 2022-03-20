@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from common.spline import Spline
-from common.quaternion import angular_velocity_np, to_scaled_angle_axis_np
+from common.quaternion import angular_velocity_np, to_scaled_angle_axis_np, to_xform_xy, qrot_inv_np, fk_vel
 
 lf = 4    # Left foot index
 rf = 9    # Right foot index
@@ -22,10 +22,28 @@ X_LEN = (2 * 3 +    # future trajectory at ground, at 20, 40, 60 frames ahead
          3 * 2 +    # left foot local position
          3 * 2 +    # right foot local position
          1)         # hip y-velocity
+
+X_OFFSETS = [0, 6, 12, 18, 24, 25]
+X_WEIGHTS = [1, 1, 1, 1, 1]
+
+Y_LEN = (25 * 3 +
+         25 * 6 +
+         25 * 3 +
+         25 * 3 +
+         3 +
+         3)
+
+Q_LEN = (25 * 3 +
+         25 * 6 +
+         25 * 3 +
+         25 * 3)
+
 Y_POS_LEN = 10
 Y_TXY_LEN = 10
 Y_VEL_LEN = 10
 Y_ANG_LEN = 10
+Y_RVEL_LEN = 3
+Y_RANG_LEN = 3
 # TODO: delete if len(y) == len(q)
 Q_POS_LEN = 10
 Q_TXY_LEN = 10
@@ -126,8 +144,7 @@ def compute_bone_positions(action, skeleton):
 def compute_bone_velocities(action, fps):
     action['velocities_local'] = np.diff(action['positions_local'], axis=0) * fps
     action['velocities_world'] = np.diff(action['positions_world'], axis=0) * fps
-    # action['angular_velocity'] = to_scaled_angle_axis_np(angular_velocity_np(action['rotations'], fps))
-    action['angular_velocity'] = angular_velocity_np(action['rotations'], fps)
+    action['angular_velocity'] = to_scaled_angle_axis_np(angular_velocity_np(action['rotations'], fps))
 
     for feature in ('velocities_local', 'velocities_world', 'angular_velocity'):
         action[feature] = np.concatenate((action[feature], action[feature][-1:]), axis=0)
@@ -138,11 +155,13 @@ def compute_bone_velocities(action, fps):
 
 
 def _future_trajectory_at_frame(positions_world, frame):
+    frame = min(positions_world.shape[0], frame)
     return np.vstack((positions_world[frame:, 0, [0, 2]],  # only x and z values
                       np.repeat(positions_world[-1:, 0, [0, 2]], frame, axis=0)))
 
 
 def _future_facing_direction_at_frame(facing_direction, frame):
+    frame = min(facing_direction.shape[0], frame)
     return np.vstack((facing_direction[frame:],
                       np.repeat(facing_direction[-1:], frame, axis=0)))
 
@@ -176,14 +195,18 @@ def _build_input_feature_vector_for_action(action):
     return input_feature
 
 
+def _std(mean, sum2, n):
+    std = np.sqrt(sum2 / n - mean ** 2)
+    std = np.where(std <= 0, np.ones_like(std), std)
+    return std
+
+
 def compute_input_features(dataset):
+    # TODO: use mean and scale for each action
     dataset.input_mean = np.zeros(X_LEN)
     dataset.input_scale = np.zeros(X_LEN)
-    dataset.total_n_frames = 0
     for subject in dataset.subjects():
-        for action in dataset[subject].keys():
-            action = dataset[action]
-
+        for action in dataset[subject].values():
             # Compute positions and velocities
             if 'positions_world' not in action or 'positions_local' not in action:
                 compute_bone_positions(action, dataset.skeleton())
@@ -191,43 +214,85 @@ def compute_input_features(dataset):
             if 'velocities_world' not in action or 'velocities_local' not in action or 'angular_velocity' not in action:
                 compute_bone_velocities(action, dataset.fps())
 
-            dataset.total_n_frames += action['n_frames']
             action['input_feature'] = _build_input_feature_vector_for_action(action)
 
     # normalize input features
     input_sum = np.zeros(X_LEN)
     input_sum2 = np.zeros(X_LEN)
     for subject in dataset.subjects():
-        for action in dataset[subject].keys():
-            action = dataset[action]
+        for action in dataset[subject].values():
             input_sum += action['input_feature'].sum(axis=0)
             input_sum2 += (action['input_feature'] ** 2).sum(axis=0)
-    dataset.input_mean = input_sum / dataset.total_n_frames
-    input_std = np.sqrt((dataset.input_sum2 - (dataset.input_sum ** 2)) / dataset.total_n_frames)
+    dataset.input_mean = input_sum / dataset.n_total_frames
+    input_std = _std(mean=dataset.input_mean, sum2=input_sum2, n=dataset.n_total_frames)
 
-    def _compute_input_scale(start, end, weight=1):
+    for start, end, weight in zip(X_OFFSETS, X_OFFSETS[1:], X_WEIGHTS):
         std = input_std[start:end].mean()
-        assert std > 0.0
         dataset.input_scale[start:end] = std / weight
 
-    _compute_input_scale(start=0, end=6, weight=1)
-    _compute_input_scale(start=6, end=12, weight=1)
-    _compute_input_scale(start=12, end=18, weight=1)
-    _compute_input_scale(start=18, end=24, weight=1)
-    _compute_input_scale(start=24, end=25, weight=1)
-
     for subject in dataset.subjects():
-        for action in dataset[subject].keys():
-            action = dataset[action]
+        for action in dataset[subject].values():
             action['input_feature'] = (action['input_feature'] - dataset.input_mean) / dataset.input_scale
 
 
+def _build_output_vector_for_action(action, parents):
+    n_frames = action['n_frames']
+    Y_feature = np.zeros((n_frames, Y_LEN))
+    Q_feature = np.zeros((n_frames, Q_LEN))
+
+    Ypos = action['positions_local']
+    Yrot = action['rotations']
+    Ytxy = to_xform_xy(Yrot)
+    Yvel = action['velocities_local']
+    Yang = action['angular_velocity']
+    Yrvel = qrot_inv_np(action['rotations'][:, 0], action['velocities_local'][:, 0])
+    Yrang = qrot_inv_np(action['rotations'][:, 0], action['angular_velocity'][:, 0])
+
+    Y_feature[:, 0:75] = Ypos[:, 1:].reshape((n_frames, -1))
+    Y_feature[:, 75:225] = Ytxy[:, 1:].reshape((n_frames, -1))
+    Y_feature[:, 225:300] = Yvel[:, 1:].reshape((n_frames, -1))
+    Y_feature[:, 300:375] = Yang[:, 1:].reshape((n_frames, -1))
+    Y_feature[:, 375:378] = Yrvel.reshape((n_frames, -1))
+    Y_feature[:, 378:381] = Yrang.reshape((n_frames, -1))
+
+    # Q
+    Qrot, Qpos, Qvel, Qang = fk_vel(Yrot, Ypos, Yvel, Yang, parents)
+    Qtxy = to_xform_xy(Qrot)
+
+    Q_feature[:, 0:75] = Qpos[:, 1:].reshape((n_frames, -1))
+    Q_feature[:, 75:225] = Qtxy[:, 1:].reshape((n_frames, -1))
+    Q_feature[:, 225:300] = Qvel[:, 1:].reshape((n_frames, -1))
+    Q_feature[:, 300:375] = Qang[:, 1:].reshape((n_frames, -1))
+
+    return Y_feature, Q_feature
+
+
 def compute_output_features(dataset):
-    # dataset.ypos_mean = np.zeros()
-    # for subject in dataset.subjects():
-    #     for action in dataset[subject].keys():
-    #         action = dataset[action]
-    pass
+    parents = dataset.skeleton().parents()
+    for subject in dataset.subjects():
+        for action in dataset[subject].values():
+            action['Y_feature'], action['Q_feature'] = _build_output_vector_for_action(action, parents)
+
+    # normalize
+    Y_sum = np.zeros(Y_LEN)
+    Y_sum2 = np.zeros(Y_LEN)
+    Q_sum = np.zeros(Q_LEN)
+    Q_sum2 = np.zeros(Q_LEN)
+    for subject in dataset.subjects():
+        for action in dataset[subject].values():
+            Y_sum += action['Y_feature'].sum(axis=0)
+            Y_sum2 += (action['Y_feature'] ** 2).sum(axis=0)
+            Q_sum += action['Q_feature'].sum(axis=0)
+            Q_sum2 += (action['Q_feature'] ** 2).sum(axis=0)
+    dataset.Y_mean = Y_sum / dataset.n_total_frames
+    dataset.Q_mean = Q_sum / dataset.n_total_frames
+    dataset.Y_scale = _std(mean=dataset.Y_mean, sum2=Y_sum2, n=dataset.n_total_frames)
+    dataset.Q_scale = _std(mean=dataset.Q_mean, sum2=Q_sum2, n=dataset.n_total_frames)
+
+    for subject in dataset.subjects():
+        for action in dataset[subject].values():
+            action['Y_feature'] = (action['Y_feature'] - dataset.Y_mean) / dataset.Y_scale
+            action['Q_feature'] = (action['Q_feature'] - dataset.Q_mean) / dataset.Q_scale
 
 
 def angle_difference_batch(y, x):

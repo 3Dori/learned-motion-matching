@@ -99,7 +99,7 @@ def qeuler(q, order, epsilon=0):
 
 def qconj(q):
     assert q.shape[-1] == 4
-    return torch.tensor([1, -1, -1, -1]) * q
+    return torch.tensor([1, -1, -1, -1], dtype=torch.float32) * q
 
 
 def angular_velocity(q, fps):
@@ -108,6 +108,14 @@ def angular_velocity(q, fps):
 
     q_conj = qconj(q[1:])
     return 2 * qmul(torch.diff(q, axis=0), q_conj) * fps
+
+
+def qinv(q):
+    return np.asarray([1, -1, -1, -1], dtype=np.float32) * q
+
+
+def qrot_inv_np(q, v):
+    return qrot_np(qinv(q), v)
 
 # Numpy-backed implementations
 
@@ -135,14 +143,30 @@ def angular_velocity_np(q, fps):
     return angular_velocity(q, fps).numpy()
 
 
-def log(x, eps=1e-5):
-    length = np.sqrt(np.sum(np.square(x[..., 1:]), axis=-1))[..., np.newaxis]
-    halfangle = np.where(length < eps, np.ones_like(length), np.arctan2(length, x[..., 0:1]) / length)
-    return halfangle * x[..., 1:]
+def log(q, eps=1e-5):
+    length = np.sqrt(np.sum(np.square(q[..., 1:]), axis=-1))[..., np.newaxis]
+    halfangle = np.where(length < eps, np.ones_like(length), np.arctan2(length, q[..., 0:1]) / length)
+    return halfangle * q[..., 1:]
 
 
-def to_scaled_angle_axis_np(x, eps=1e-5):
-    return 2.0 * log(x, eps)
+def to_scaled_angle_axis_np(q, eps=1e-5):
+    return 2.0 * log(q, eps)
+
+
+def to_xform_xy(q):
+    # two-column form
+    qw, qx, qy, qz = q[..., 0:1], q[..., 1:2], q[..., 2:3], q[..., 3:4]
+
+    x2, y2, z2 = qx + qx, qy + qy, qz + qz
+    xx, yy, wx = qx * x2, qy * y2, qw * x2
+    xy, yz, wy = qx * y2, qy * z2, qw * y2
+    xz, zz, wz = qx * z2, qz * z2, qw * z2
+
+    return np.concatenate([
+        np.concatenate([1.0 - (yy + zz), xy - wz], axis=-1)[..., np.newaxis, :],
+        np.concatenate([xy + wz, 1.0 - (xx + zz)], axis=-1)[..., np.newaxis, :],
+        np.concatenate([xz - wy, yz + wx], axis=-1)[..., np.newaxis, :],
+    ], axis=-2)
 
 
 def _fast_cross(a, b):
@@ -158,9 +182,9 @@ def fk_vel(lrot, lpos, lvel, lang, parents):
         gp.append(qrot_np(gr[parents[i]], lpos[..., i:i + 1, :]) + gp[parents[i]])
         gr.append(qmul_np(gr[parents[i]], lrot[..., i:i + 1, :]))
         gv.append(qrot_np(gr[parents[i]], lvel[..., i:i + 1, :]) +
-                  _fast_cross(ga[parents[i]], qmul_np(gr[parents[i]], lpos[..., i:i + 1, :])) +
+                  _fast_cross(ga[parents[i]], qrot_np(gr[parents[i]], lpos[..., i:i + 1, :])) +
                   gv[parents[i]])
-        ga.append(qmul_np(gr[parents[i]], lang[..., i:i + 1, :]) + ga[parents[i]])
+        ga.append(qrot_np(gr[parents[i]], lang[..., i:i + 1, :]) + ga[parents[i]])
 
     return (
         np.concatenate(gr, axis=-2),
