@@ -6,9 +6,8 @@
 #
 
 import numpy as np
-import torch
 from common.quaternion import qeuler_np, qfix
-from long_term.locomotion_utils import compute_bone_positions, compute_bone_velocities
+from datasets.locomotion_utils import compute_bone_positions, compute_bone_velocities
 
 
 class MocapDataset:

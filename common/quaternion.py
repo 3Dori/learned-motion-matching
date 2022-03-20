@@ -153,7 +153,7 @@ def to_scaled_angle_axis_np(q, eps=1e-5):
     return 2.0 * log(q, eps)
 
 
-def to_xform_xy(q):
+def to_xform_xy_np(q):
     # two-column form
     qw, qx, qy, qz = q[..., 0:1], q[..., 1:2], q[..., 2:3], q[..., 3:4]
 
@@ -169,20 +169,59 @@ def to_xform_xy(q):
     ], axis=-2)
 
 
+def to_xform_np(q):
+    # two-column form
+    qw, qx, qy, qz = q[..., 0:1], q[..., 1:2], q[..., 2:3], q[..., 3:4]
+
+    x2, y2, z2 = qx + qx, qy + qy, qz + qz
+    xx, yy, wx = qx * x2, qy * y2, qw * x2
+    xy, yz, wy = qx * y2, qy * z2, qw * y2
+    xz, zz, wz = qx * z2, qz * z2, qw * z2
+
+    return np.concatenate([
+        np.concatenate([1.0 - (yy + zz), xy - wz, xz + wy], axis=-1)[..., np.newaxis, :],
+        np.concatenate([xy + wz, 1.0 - (xx + zz), yz - wx], axis=-1)[..., np.newaxis, :],
+        np.concatenate([xz - wy, yz + wx, 1.0 - (xx + yy)], axis=-1)[..., np.newaxis, :],
+    ], axis=-2)
+
+
+
+def from_xy(x):
+    c2 = _fast_cross(x[..., 0], x[..., 1])
+    c2 = c2 / torch.sqrt(torch.sum(torch.square(c2), dim=-1))[..., None]
+    c1 = _fast_cross(c2, x[..., 0])
+    c1 = c1 / torch.sqrt(torch.sum(torch.square(c1), dim=-1))[..., None]
+    c0 = x[..., 0]
+
+    return torch.cat([
+        c0[..., None],
+        c1[..., None],
+        c2[..., None]
+    ], dim=-1)
+
+
 def _fast_cross(a, b):
+    return torch.cat([
+        a[...,1:2]*b[...,2:3] - a[...,2:3]*b[...,1:2],
+        a[...,2:3]*b[...,0:1] - a[...,0:1]*b[...,2:3],
+        a[...,0:1]*b[...,1:2] - a[...,1:2]*b[...,0:1]
+    ], dim=-1)
+
+
+def _fast_cross_np(a, b):
     return np.concatenate([
         a[...,1:2]*b[...,2:3] - a[...,2:3]*b[...,1:2],
         a[...,2:3]*b[...,0:1] - a[...,0:1]*b[...,2:3],
         a[...,0:1]*b[...,1:2] - a[...,1:2]*b[...,0:1]], axis=-1)
 
 
-def fk_vel(lrot, lpos, lvel, lang, parents):
+def fk_vel_np(lrot, lpos, lvel, lang, parents):
     gp, gr, gv, ga = [lpos[..., :1, :]], [lrot[..., :1, :]], [lvel[..., :1, :]], [lang[..., :1, :]]
     for i in range(1, len(parents)):
         gp.append(qrot_np(gr[parents[i]], lpos[..., i:i + 1, :]) + gp[parents[i]])
         gr.append(qmul_np(gr[parents[i]], lrot[..., i:i + 1, :]))
         gv.append(qrot_np(gr[parents[i]], lvel[..., i:i + 1, :]) +
-                  _fast_cross(ga[parents[i]], qrot_np(gr[parents[i]], lpos[..., i:i + 1, :])) +
+                  _fast_cross_np(ga[parents[i]], qrot_np(gr[parents[i]], lpos[..., i:i + 1, :])) +
                   gv[parents[i]])
         ga.append(qrot_np(gr[parents[i]], lang[..., i:i + 1, :]) + ga[parents[i]])
 
@@ -191,6 +230,32 @@ def fk_vel(lrot, lpos, lvel, lang, parents):
         np.concatenate(gp, axis=-2),
         np.concatenate(gv, axis=-2),
         np.concatenate(ga, axis=-2))
+
+
+def _mul(x, y):
+    return torch.matmul(x, y)
+
+
+def _mul_vec(x, v):
+    return torch.matmul(x, v[..., None])[..., 0]
+
+
+def fk_vel(lrot, lpos, lvel, lang, parents):
+    # lrot is a transform matrix
+    gp, gr, gv, ga = [lpos[..., :1, :]], [lrot[..., :1, :, :]], [lvel[..., :1, :]], [lang[..., :1, :]]
+    for i in range(1, len(parents)):
+        gp.append(_mul_vec(gr[parents[i]], lpos[..., i:i + 1, :]) + gp[parents[i]])
+        gr.append(_mul(gr[parents[i]], lrot[..., i:i + 1, :, :]))
+        gv.append(_mul_vec(gr[parents[i]], lvel[..., i:i + 1, :]) +
+                  torch.cross(ga[parents[i]], _mul_vec(gr[parents[i]], lpos[..., i:i + 1, :]), dim=-1) +
+                  gv[parents[i]])
+        ga.append(_mul_vec(gr[parents[i]], lang[..., i:i + 1, :]) + ga[parents[i]])
+
+    return (
+        torch.cat(gr, dim=-3),
+        torch.cat(gp, dim=-2),
+        torch.cat(gv, dim=-2),
+        torch.cat(ga, dim=-2))
 
 
 def qfix(q):
