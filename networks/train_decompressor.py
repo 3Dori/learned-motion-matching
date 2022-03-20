@@ -2,7 +2,7 @@ import sys
 
 from networks.learned_motion_AE import Compressor, Decompressor
 from common.quaternion import from_xy, fk_vel
-import datasets.locomotion_utils as utils
+import common.locomotion_utils as utils
 
 import numpy as np
 import torch

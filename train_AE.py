@@ -1,7 +1,7 @@
 import torch.cuda
 
-from datasets.dataset_locomotion import dataset, actions_valid
-from datasets.locomotion_utils import build_extra_features, compute_input_features, compute_output_features
+from common.dataset_locomotion import dataset, actions_valid
+from common.locomotion_utils import build_extra_features, compute_input_features, compute_output_features
 
 import os.path
 import pickle

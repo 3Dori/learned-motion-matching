@@ -7,7 +7,7 @@
 
 import numpy as np
 from common.quaternion import qeuler_np, qfix
-from datasets.locomotion_utils import compute_bone_positions, compute_bone_velocities
+from common.locomotion_utils import compute_bone_positions, compute_bone_velocities
 
 
 class MocapDataset:
