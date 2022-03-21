@@ -2,7 +2,7 @@ import sys
 
 from common.visualization import generate_animation
 from networks.learned_motion_AE import Compressor, Decompressor
-from networks.utils import extract_locomotion_from_y_feature_vector
+from networks.utils import extract_locomotion_from_y_feature_vector, randomly_pick_from_dataset
 from common.quaternion import from_xy, fk_vel
 import common.locomotion_utils as utils
 
@@ -11,14 +11,12 @@ import torch
 
 
 class DecompressorTrainer(object):
-    def __init__(self, compressor_hidden_size=512, decompressor_hidden_size=512, z_len=512):
+    def __init__(self, compressor_hidden_size=512, decompressor_hidden_size=512):
         self.compressor_hidden_size = compressor_hidden_size
         self.decompressor_hidden_size = decompressor_hidden_size
-        self.z_len = z_len
-        self.device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
     @staticmethod
-    def prepare_batches(dataset, batch_size, window, sequences):
+    def prepare_batches(dataset, sequences, window, batch_size):
         buffer_x = np.zeros((batch_size, window, utils.X_LEN), dtype=np.float32)
         buffer_y = np.zeros((batch_size, window, utils.Y_LEN), dtype=np.float32)
         buffer_q = np.zeros((batch_size, window, utils.Q_LEN), dtype=np.float32)
@@ -35,35 +33,28 @@ class DecompressorTrainer(object):
         buffer_q_gnd_ang = np.zeros((batch_size, window, utils.N_BONES, 3), dtype=np.float32)
         buffer_q_gnd_xfm = np.zeros((batch_size, window, utils.N_BONES, 3, 3), dtype=np.float32)
 
-        probs = []
-        for i, (subject, action) in enumerate(sequences):
-            probs.append(dataset[subject][action]['n_frames'])
-        probs = np.array(probs) / np.sum(probs)
+        for i, action in randomly_pick_from_dataset(dataset, sequences, batch_size):
+            frame = np.random.randint(0, action['n_frames'] - 2)
+            buffer_x[i, 0:window] = action['input_feature'][frame:frame+window]
+            buffer_y[i, 0:window] = action['Y_feature'][frame:frame+window]
+            buffer_q[i, 0:window] = action['Q_feature'][frame:frame+window]
 
-        while True:
-            idxs = np.random.choice(len(sequences), size=batch_size, replace=True, p=probs)
-            # randomly pick batch_size pairs of frames
-            for i, (subject, action) in enumerate(sequences[idxs]):
-                action = dataset[subject][action]
-                frame = np.random.randint(0, action['n_frames']-2)
-                buffer_x[i, 0:window] = action['input_feature'][frame:frame+window]
-                buffer_y[i, 0:window] = action['Y_feature'][frame:frame+window]
-                buffer_q[i, 0:window] = action['Q_feature'][frame:frame+window]
+            buffer_y_gnd_pos[i, 0:window] = action['positions_local'][frame:frame+window]
+            buffer_y_gnd_txy[i, 0:window] = action['rotations_txy'][frame:frame+window]
+            buffer_y_gnd_vel[i, 0:window] = action['velocities_local'][frame:frame+window]
+            buffer_y_gnd_ang[i, 0:window] = action['angular_velocity'][frame:frame+window]
+            buffer_y_gnd_rvel[i, 0:window] = action['Yrvel'][frame:frame+window]
+            buffer_y_gnd_rang[i, 0:window] = action['Yrang'][frame:frame+window]
 
-                buffer_y_gnd_pos[i, 0:window] = action['positions_local'][frame:frame+window]
-                buffer_y_gnd_txy[i, 0:window] = action['rotations_txy'][frame:frame+window]
-                buffer_y_gnd_vel[i, 0:window] = action['velocities_local'][frame:frame+window]
-                buffer_y_gnd_ang[i, 0:window] = action['angular_velocity'][frame:frame+window]
-                buffer_y_gnd_rvel[i, 0:window] = action['Yrvel'][frame:frame+window]
-                buffer_y_gnd_rang[i, 0:window] = action['Yrang'][frame:frame+window]
-
-                buffer_q_gnd_pos[i, 0:window] = action['Qpos'][frame:frame+window]
-                buffer_q_gnd_vel[i, 0:window] = action['Qvel'][frame:frame+window]
-                buffer_q_gnd_ang[i, 0:window] = action['Qang'][frame:frame+window]
-                buffer_q_gnd_xfm[i, 0:window] = action['Qxfm'][frame:frame+window]
-            yield (buffer_x, buffer_y, buffer_q,
-                   buffer_y_gnd_pos, buffer_y_gnd_txy, buffer_y_gnd_vel, buffer_y_gnd_ang, buffer_y_gnd_rvel, buffer_y_gnd_rang,
-                   buffer_q_gnd_pos, buffer_q_gnd_vel, buffer_q_gnd_ang, buffer_q_gnd_xfm)
+            buffer_q_gnd_pos[i, 0:window] = action['Qpos'][frame:frame+window]
+            buffer_q_gnd_vel[i, 0:window] = action['Qvel'][frame:frame+window]
+            buffer_q_gnd_ang[i, 0:window] = action['Qang'][frame:frame+window]
+            buffer_q_gnd_xfm[i, 0:window] = action['Qxfm'][frame:frame+window]
+        assert i == batch_size
+        yield (buffer_x, buffer_y, buffer_q,
+               buffer_y_gnd_pos, buffer_y_gnd_txy, buffer_y_gnd_vel, buffer_y_gnd_ang, buffer_y_gnd_rvel,
+               buffer_y_gnd_rang,
+               buffer_q_gnd_pos, buffer_q_gnd_vel, buffer_q_gnd_ang, buffer_q_gnd_xfm)
 
     def train(
             self, dataset, batch_size=32, window=2, epochs=10000, lr=0.001,
@@ -87,9 +78,9 @@ class DecompressorTrainer(object):
             seed=0
     ):
         compressor = Compressor(input_size=utils.Y_LEN + utils.Q_LEN,
-                                output_size=self.z_len,
+                                output_size=utils.Z_LEN,
                                 hidden_size=self.compressor_hidden_size)
-        decompressor = Decompressor(input_size=utils.X_LEN + self.z_len,
+        decompressor = Decompressor(input_size=utils.X_LEN + utils.Z_LEN,
                                     output_size=utils.Y_LEN,
                                     hidden_size=self.decompressor_hidden_size)
         optimizer = torch.optim.AdamW(
@@ -100,6 +91,7 @@ class DecompressorTrainer(object):
             weight_decay=0.001
         )
 
+        device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
         rolling_loss = None
         parents = dataset.skeleton().parents()
@@ -110,13 +102,13 @@ class DecompressorTrainer(object):
             for action in dataset[subject].keys():
                 sequences.append((subject, action))
         sequences = np.array(sequences)
-        batches = self.prepare_batches(dataset, batch_size, window, sequences)
+        batches = self.prepare_batches(dataset, sequences, window, batch_size)
 
         np.random.seed(seed)
         torch.manual_seed(seed)
 
-        Y_mean = torch.tensor(dataset.Y_mean, dtype=torch.float32).to(self.device)
-        Y_decompressor_scale = torch.tensor(dataset.Y_decompressor_scale, dtype=torch.float32).to(self.device)
+        Y_mean = torch.tensor(dataset.Y_mean, dtype=torch.float32).to(device)
+        Y_decompressor_scale = torch.tensor(dataset.Y_decompressor_scale, dtype=torch.float32).to(device)
 
         for epoch in range(epochs):
             optimizer.zero_grad()
@@ -124,19 +116,19 @@ class DecompressorTrainer(object):
             (x, y, q,
              Ygnd_pos, Ygnd_txy, Ygnd_vel, Ygnd_ang, Ygnd_rvel, Ygnd_rang,
              Qgnd_pos, Qgnd_vel, Qgnd_ang, Qgnd_xfm) = next(batches)
-            x = torch.tensor(x).to(self.device)
-            y = torch.tensor(y).to(self.device)
-            q = torch.tensor(q).to(self.device)
-            Ygnd_pos = torch.tensor(Ygnd_pos).to(self.device)
-            Ygnd_txy = torch.tensor(Ygnd_txy).to(self.device)
-            Ygnd_vel = torch.tensor(Ygnd_vel).to(self.device)
-            Ygnd_ang = torch.tensor(Ygnd_ang).to(self.device)
-            Ygnd_rvel = torch.tensor(Ygnd_rvel).to(self.device)
-            Ygnd_rang = torch.tensor(Ygnd_rang).to(self.device)
-            Qgnd_pos = torch.tensor(Qgnd_pos).to(self.device)
-            Qgnd_vel = torch.tensor(Qgnd_vel).to(self.device)
-            Qgnd_ang = torch.tensor(Qgnd_ang).to(self.device)
-            Qgnd_xfm = torch.tensor(Qgnd_xfm).to(self.device)
+            x = torch.tensor(x).to(device)
+            y = torch.tensor(y).to(device)
+            q = torch.tensor(q).to(device)
+            Ygnd_pos = torch.tensor(Ygnd_pos).to(device)
+            Ygnd_txy = torch.tensor(Ygnd_txy).to(device)
+            Ygnd_vel = torch.tensor(Ygnd_vel).to(device)
+            Ygnd_ang = torch.tensor(Ygnd_ang).to(device)
+            Ygnd_rvel = torch.tensor(Ygnd_rvel).to(device)
+            Ygnd_rang = torch.tensor(Ygnd_rang).to(device)
+            Qgnd_pos = torch.tensor(Qgnd_pos).to(device)
+            Qgnd_vel = torch.tensor(Qgnd_vel).to(device)
+            Qgnd_ang = torch.tensor(Qgnd_ang).to(device)
+            Qgnd_xfm = torch.tensor(Qgnd_xfm).to(device)
 
             # encode
             z = compressor((torch.cat([y, q], dim=-1)))    # y and q have been normalized
@@ -223,7 +215,7 @@ class DecompressorTrainer(object):
                 sys.stdout.write('\rIter: %7i Loss: %5.3f' % (epoch, rolling_loss))
 
             if epoch % 1000 == 0:
-                generate_animation(dataset, dataset['S1']['jog_1_d0'], compressor, decompressor, self.device)
+                generate_animation(dataset, dataset['S1']['jog_1_d0'], compressor, decompressor, device)
 
             if epoch % 1000 == 0:
                 scheduler.step()
