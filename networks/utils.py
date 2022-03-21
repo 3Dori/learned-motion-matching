@@ -10,3 +10,11 @@ def extract_locomotion_from_y_feature_vector(y, batch_size, window):
     Yrang = y[:, :, 378:381].reshape((batch_size, window, 3))
 
     return Ypos, Ytxy, Yvel, Yang, Yrvel, Yrang
+
+
+def all_sequences_of_dataset(dataset):
+    sequences = []
+    for subject in dataset.subjects():
+        for action in dataset[subject].keys():
+            sequences.append((subject, action))
+    return np.array(sequences)

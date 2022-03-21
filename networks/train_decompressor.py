@@ -2,7 +2,7 @@ import sys
 
 from common.visualization import generate_animation
 from networks.learned_motion_AE import Compressor, Decompressor
-from networks.utils import extract_locomotion_from_y_feature_vector
+from networks.utils import extract_locomotion_from_y_feature_vector, all_sequences_of_dataset
 from common.quaternion import from_xy, fk_vel
 import common.locomotion_utils as utils
 
@@ -16,7 +16,7 @@ class DecompressorTrainer(object):
         self.decompressor_hidden_size = decompressor_hidden_size
 
     @staticmethod
-    def prepare_batches(dataset, sequences, window, batch_size):
+    def prepare_batches(dataset, sequences, batch_size, window):
         buffer_x = np.zeros((batch_size, window, utils.X_LEN), dtype=np.float32)
         buffer_y = np.zeros((batch_size, window, utils.Y_LEN), dtype=np.float32)
         buffer_q = np.zeros((batch_size, window, utils.Q_LEN), dtype=np.float32)
@@ -43,7 +43,7 @@ class DecompressorTrainer(object):
             # randomly pick batch_size pairs of frames
             for i, (subject, action) in enumerate(sequences[idxs]):
                 action = dataset[subject][action]
-                frame = np.random.randint(0, action['n_frames'] - 2)
+                frame = np.random.randint(0, action['n_frames'] - window)
                 buffer_x[i, 0:window] = action['input_feature'][frame:frame+window]
                 buffer_y[i, 0:window] = action['Y_feature'][frame:frame+window]
                 buffer_q[i, 0:window] = action['Q_feature'][frame:frame+window]
@@ -105,12 +105,8 @@ class DecompressorTrainer(object):
         parents = dataset.skeleton().parents()
         fps = dataset.fps()
 
-        sequences = []
-        for subject in dataset.subjects():
-            for action in dataset[subject].keys():
-                sequences.append((subject, action))
-        sequences = np.array(sequences)
-        batches = self.prepare_batches(dataset, sequences, window, batch_size)
+        sequences = all_sequences_of_dataset(dataset)
+        batches = self.prepare_batches(dataset, sequences, batch_size, window)
 
         np.random.seed(seed)
         torch.manual_seed(seed)
