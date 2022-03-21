@@ -2,7 +2,7 @@ import sys
 
 from common.visualization import generate_animation
 from networks.learned_motion_AE import Compressor, Decompressor
-from networks.utils import extract_locomotion_from_y_feature_vector, randomly_pick_from_dataset
+from networks.utils import extract_locomotion_from_y_feature_vector
 from common.quaternion import from_xy, fk_vel
 import common.locomotion_utils as utils
 
