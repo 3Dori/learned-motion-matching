@@ -33,28 +33,36 @@ class DecompressorTrainer(object):
         buffer_q_gnd_ang = np.zeros((batch_size, window, utils.N_BONES, 3), dtype=np.float32)
         buffer_q_gnd_xfm = np.zeros((batch_size, window, utils.N_BONES, 3, 3), dtype=np.float32)
 
-        for i, action in randomly_pick_from_dataset(dataset, sequences, batch_size):
-            frame = np.random.randint(0, action['n_frames'] - 2)
-            buffer_x[i, 0:window] = action['input_feature'][frame:frame+window]
-            buffer_y[i, 0:window] = action['Y_feature'][frame:frame+window]
-            buffer_q[i, 0:window] = action['Q_feature'][frame:frame+window]
+        probs = []
+        for i, (subject, action) in enumerate(sequences):
+            probs.append(dataset[subject][action]['n_frames'])
+        probs = np.array(probs) / np.sum(probs)
 
-            buffer_y_gnd_pos[i, 0:window] = action['positions_local'][frame:frame+window]
-            buffer_y_gnd_txy[i, 0:window] = action['rotations_txy'][frame:frame+window]
-            buffer_y_gnd_vel[i, 0:window] = action['velocities_local'][frame:frame+window]
-            buffer_y_gnd_ang[i, 0:window] = action['angular_velocity'][frame:frame+window]
-            buffer_y_gnd_rvel[i, 0:window] = action['Yrvel'][frame:frame+window]
-            buffer_y_gnd_rang[i, 0:window] = action['Yrang'][frame:frame+window]
+        while True:
+            idxs = np.random.choice(len(sequences), size=batch_size, replace=True, p=probs)
+            # randomly pick batch_size pairs of frames
+            for i, (subject, action) in enumerate(sequences[idxs]):
+                action = dataset[subject][action]
+                frame = np.random.randint(0, action['n_frames'] - 2)
+                buffer_x[i, 0:window] = action['input_feature'][frame:frame+window]
+                buffer_y[i, 0:window] = action['Y_feature'][frame:frame+window]
+                buffer_q[i, 0:window] = action['Q_feature'][frame:frame+window]
 
-            buffer_q_gnd_pos[i, 0:window] = action['Qpos'][frame:frame+window]
-            buffer_q_gnd_vel[i, 0:window] = action['Qvel'][frame:frame+window]
-            buffer_q_gnd_ang[i, 0:window] = action['Qang'][frame:frame+window]
-            buffer_q_gnd_xfm[i, 0:window] = action['Qxfm'][frame:frame+window]
-        assert i == batch_size
-        yield (buffer_x, buffer_y, buffer_q,
-               buffer_y_gnd_pos, buffer_y_gnd_txy, buffer_y_gnd_vel, buffer_y_gnd_ang, buffer_y_gnd_rvel,
-               buffer_y_gnd_rang,
-               buffer_q_gnd_pos, buffer_q_gnd_vel, buffer_q_gnd_ang, buffer_q_gnd_xfm)
+                buffer_y_gnd_pos[i, 0:window] = action['positions_local'][frame:frame+window]
+                buffer_y_gnd_txy[i, 0:window] = action['rotations_txy'][frame:frame+window]
+                buffer_y_gnd_vel[i, 0:window] = action['velocities_local'][frame:frame+window]
+                buffer_y_gnd_ang[i, 0:window] = action['angular_velocity'][frame:frame+window]
+                buffer_y_gnd_rvel[i, 0:window] = action['Yrvel'][frame:frame+window]
+                buffer_y_gnd_rang[i, 0:window] = action['Yrang'][frame:frame+window]
+
+                buffer_q_gnd_pos[i, 0:window] = action['Qpos'][frame:frame+window]
+                buffer_q_gnd_vel[i, 0:window] = action['Qvel'][frame:frame+window]
+                buffer_q_gnd_ang[i, 0:window] = action['Qang'][frame:frame+window]
+                buffer_q_gnd_xfm[i, 0:window] = action['Qxfm'][frame:frame+window]
+            yield (buffer_x, buffer_y, buffer_q,
+                   buffer_y_gnd_pos, buffer_y_gnd_txy, buffer_y_gnd_vel, buffer_y_gnd_ang, buffer_y_gnd_rvel,
+                   buffer_y_gnd_rang,
+                   buffer_q_gnd_pos, buffer_q_gnd_vel, buffer_q_gnd_ang, buffer_q_gnd_xfm)
 
     def train(
             self, dataset, batch_size=32, window=2, epochs=10000, lr=0.001,
