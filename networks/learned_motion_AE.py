@@ -46,10 +46,10 @@ class Stepper(nn.Module):
         self.linear2 = nn.Linear(hidden_size, param_size)
 
     def forward(self, x):
-        # n_batch, n_window = x.shape[:2]
-        # x = x.reshape((n_batch * n_window, -1))
+        n_batch, n_window = x.shape[:2]
+        x = x.reshape((n_batch * n_window, -1))
         x = F.relu(self.linear0(x))
         x = F.relu(self.linear1(x))
         x = self.linear2(x)
-        # return x.reshape((n_batch, n_window, -1))
-        return x
+        return x.reshape((n_batch, n_window, -1))
+        # return x

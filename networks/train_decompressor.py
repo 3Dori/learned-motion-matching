@@ -65,7 +65,7 @@ class DecompressorTrainer(object):
                    buffer_q_gnd_pos, buffer_q_gnd_vel, buffer_q_gnd_ang, buffer_q_gnd_xfm)
 
     def train(
-            self, dataset, batch_size=32, window=2, epochs=10000, lr=0.001,
+            self, dataset, batch_size=32, window=2, epochs=10000, lr=0.001, seed=0,
             w_loc_pos=75.0,
             w_loc_txy=10.0,
             w_loc_vel=10.0,
@@ -82,9 +82,11 @@ class DecompressorTrainer(object):
             w_cvel_rot=0.75,
             w_sreg=0.1,
             w_lreg=0.1,
-            w_vreg=0.01,
-            seed=0
+            w_vreg=0.01
     ):
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+
         compressor = Compressor(input_size=utils.Y_LEN + utils.Q_LEN,
                                 output_size=utils.Z_LEN,
                                 hidden_size=self.compressor_hidden_size)
@@ -101,15 +103,11 @@ class DecompressorTrainer(object):
 
         device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
-        rolling_loss = None
         parents = dataset.skeleton().parents()
         fps = dataset.fps()
 
         sequences = all_sequences_of_dataset(dataset)
         batches = self.prepare_batches(dataset, sequences, batch_size, window)
-
-        np.random.seed(seed)
-        torch.manual_seed(seed)
 
         Y_mean = torch.tensor(dataset.Y_mean, dtype=torch.float32).to(device)
         Y_decompressor_scale = torch.tensor(dataset.Y_decompressor_scale, dtype=torch.float32).to(device)
@@ -210,16 +208,13 @@ class DecompressorTrainer(object):
             optimizer.step()
 
             # logging
-            if rolling_loss is None:
-                rolling_loss = loss.item()
-            else:
-                rolling_loss = rolling_loss * 0.99 + loss.item() * 0.01
-
             if epoch % 10 == 0:
-                sys.stdout.write('\rIter: %7i Loss: %5.3f' % (epoch, rolling_loss))
+                sys.stdout.write('\rIter: %7i Loss: %5.3f' % (epoch, loss.item()))
 
             if epoch % 1000 == 0:
                 generate_animation(dataset, dataset['S1']['jog_1_d0'], compressor, decompressor, device)
 
             if epoch % 1000 == 0:
                 scheduler.step()
+
+        return compressor, decompressor
