@@ -199,7 +199,7 @@ def _std(mean, sum2, n):
     return std
 
 
-def _std_y_feature(sum_, sum2, n, start, end):
+def _std_with_range(sum_, sum2, n, start, end):
     sum_ = sum_[start:end].sum()
     sum2 = sum2[start:end].sum()
     mean = sum_ / (n * (end - start))
@@ -209,8 +209,8 @@ def _std_y_feature(sum_, sum2, n, start, end):
 
 def compute_input_features(dataset):
     # TODO: use mean and scale for each action
-    dataset.input_mean = np.zeros(X_LEN)
-    dataset.input_scale = np.zeros(X_LEN)
+    dataset.decompressor_mean = np.zeros(X_LEN)
+    dataset.decompressor_scale = np.zeros(X_LEN)
     for subject in dataset.subjects():
         for action in dataset[subject].values():
             # Compute positions and velocities
@@ -229,16 +229,67 @@ def compute_input_features(dataset):
         for action in dataset[subject].values():
             input_sum += action['input_feature'].sum(axis=0)
             input_sum2 += (action['input_feature'] ** 2).sum(axis=0)
-    dataset.input_mean = input_sum / dataset.n_total_frames
-    input_std = _std(mean=dataset.input_mean, sum2=input_sum2, n=dataset.n_total_frames)
+    dataset.decompressor_mean = input_sum / dataset.n_total_frames
+    input_std = _std(mean=dataset.decompressor_mean, sum2=input_sum2, n=dataset.n_total_frames)
 
     for start, end, weight in zip(X_OFFSETS, X_OFFSETS[1:], X_WEIGHTS):
         std = input_std[start:end].mean()
-        dataset.input_scale[start:end] = std / weight
+        dataset.decompressor_scale[start:end] = std / weight
 
+    # for subject in dataset.subjects():
+    #     for action in dataset[subject].values():
+    #         action['input_feature'] = ((action['input_feature'] - dataset.decompressor_mean) / dataset.decompressor_scale).astype(np.float32)
+
+
+def compute_z_vector(dataset, compressor):
+    # generate z features
+    device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+    with torch.no_grad():
+        for subject in dataset.subjects():
+            for action in dataset[subject].values():
+                y = torch.tensor(action['Y_feature'][np.newaxis]).to(device)
+                q = torch.tensor(action['Q_feature'][np.newaxis]).to(device)
+
+                z = compressor(torch.cat([y, q], dim=-1))
+                action['Z_code'] = z.reshape((-1, Z_LEN)).cpu().numpy()
+    # normalize
+    dataset.stepper_mean_in = np.zeros(X_LEN + Z_LEN, dtype=np.float32)
+    dataset.stepper_mean_out = np.zeros(X_LEN + Z_LEN, dtype=np.float32)
+    dataset.stepper_std_in = np.zeros(X_LEN + Z_LEN, dtype=np.float32)
+    dataset.stepper_std_out = np.zeros(X_LEN + Z_LEN, dtype=np.float32)
+
+    fps = dataset.fps()
+    n_actions = len(dataset.all_actions())
+    x_sum = np.zeros(X_LEN)
+    z_sum = np.zeros(Z_LEN)
+    x_sum2 = np.zeros(X_LEN)
+    z_sum2 = np.zeros(Z_LEN)
+    dx_sum = np.zeros(X_LEN)
+    dz_sum = np.zeros(Z_LEN)
+    dx_sum2 = np.zeros(X_LEN)
+    dz_sum2 = np.zeros(Z_LEN)
     for subject in dataset.subjects():
         for action in dataset[subject].values():
-            action['input_feature'] = ((action['input_feature'] - dataset.input_mean) / dataset.input_scale).astype(np.float32)
+            x_sum += action['input_feature'].sum(axis=0)
+            x_sum2 += (action['input_feature'] ** 2).sum(axis=0)
+            z_sum += action['Z_code'].sum(axis=0)
+            z_sum2 += (action['Z_code'] ** 2).sum(axis=0)
+
+            dx = (action['input_feature'][1:] - action['input_feature'][:-1]) * fps
+            dx_sum += dx.sum(axis=0)
+            dx_sum2 += (dx ** 2).sum(axis=0)
+            dz = (action['Z_code'][1:] - action['Z_code'][:-1]) * fps
+            dz_sum += dz.sum(axis=0)
+            dz_sum2 += (dz ** 2).sum(axis=0)
+    dataset.stepper_mean_in[:X_LEN] = x_sum / dataset.n_total_frames
+    dataset.stepper_std_in[:X_LEN] = _std_with_range(x_sum, x_sum2, dataset.n_total_frames, 0, X_LEN)
+    dataset.stepper_mean_in[X_LEN:] = z_sum / dataset.n_total_frames
+    dataset.stepper_std_in[X_LEN:] = _std_with_range(z_sum, z_sum2, dataset.n_total_frames, X_LEN, X_LEN + Z_LEN)
+
+    dataset.stepper_mean_out[:X_LEN] = dx_sum / (dataset.n_total_frames - n_actions)
+    dataset.stepper_std_out[:X_LEN] = _std(dataset.stepper_mean_out[:X_LEN], dx_sum2, (dataset.n_total_frames - n_actions))
+    dataset.stepper_mean_out[X_LEN:] = dz_sum / (dataset.n_total_frames - n_actions)
+    dataset.stepper_std_out[X_LEN:] = _std(dataset.stepper_mean_out[X_LEN:], dz_sum2, (dataset.n_total_frames - n_actions))
 
 
 def _build_output_vector_for_action(action, parents):
@@ -305,18 +356,18 @@ def compute_output_features(dataset):
     dataset.Y_mean = Y_sum / dataset.n_total_frames
     dataset.Q_mean = Q_sum / dataset.n_total_frames
     for start, end in zip(Y_OFFSETS, Y_OFFSETS[1:]):
-        std = _std_y_feature(Y_sum, Y_sum2, dataset.n_total_frames, start, end)
+        std = _std_with_range(Y_sum, Y_sum2, dataset.n_total_frames, start, end)
         dataset.Y_compressor_scale[start:end] = std
     for start, end in zip(Q_OFFSETS, Q_OFFSETS[1:]):
-        std = _std_y_feature(Q_sum, Q_sum2, dataset.n_total_frames, start, end)
+        std = _std_with_range(Q_sum, Q_sum2, dataset.n_total_frames, start, end)
         dataset.Q_compressor_scale[start:end] = std
     dataset.Y_decompressor_scale = _std(mean=dataset.Y_mean, sum2=Y_sum2, n=dataset.n_total_frames).astype(np.float32)
     dataset.Q_decompressor_scale = _std(mean=dataset.Q_mean, sum2=Q_sum2, n=dataset.n_total_frames).astype(np.float32)
 
-    for subject in dataset.subjects():
-        for action in dataset[subject].values():
-            action['Y_feature'] = ((action['Y_feature'] - dataset.Y_mean) / dataset.Y_compressor_scale).astype(np.float32)
-            action['Q_feature'] = ((action['Q_feature'] - dataset.Q_mean) / dataset.Q_compressor_scale).astype(np.float32)
+    # for subject in dataset.subjects():
+    #     for action in dataset[subject].values():
+    #         action['Y_feature'] = ((action['Y_feature'] - dataset.Y_mean) / dataset.Y_compressor_scale).astype(np.float32)
+    #         action['Q_feature'] = ((action['Q_feature'] - dataset.Q_mean) / dataset.Q_compressor_scale).astype(np.float32)
 
 
 def angle_difference_batch(y, x):

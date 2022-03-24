@@ -52,4 +52,3 @@ class Stepper(nn.Module):
         x = F.relu(self.linear1(x))
         x = self.linear2(x)
         return x.reshape((n_batch, n_window, -1))
-        # return x

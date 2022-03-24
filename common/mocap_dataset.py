@@ -132,3 +132,6 @@ class MocapDataset:
 
     def skeleton(self):
         return self._skeleton
+
+    def device(self):
+        return 'cuda:0' if self._use_gpu else 'cpu'

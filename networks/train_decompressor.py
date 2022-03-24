@@ -1,6 +1,5 @@
 import sys
 
-from common.visualization import generate_animation
 from networks.learned_motion_AE import Compressor, Decompressor
 from networks.utils import extract_locomotion_from_y_feature_vector, all_sequences_of_dataset
 from common.quaternion import from_xy, fk_vel
@@ -65,7 +64,7 @@ class DecompressorTrainer(object):
                    buffer_q_gnd_pos, buffer_q_gnd_vel, buffer_q_gnd_ang, buffer_q_gnd_xfm)
 
     def train(
-            self, dataset, batch_size=32, window=2, epochs=10000, lr=0.001, seed=0,
+            self, dataset, batch_size=32, window=2, epochs=100000, lr=0.001, seed=0,
             w_loc_pos=75.0,
             w_loc_txy=10.0,
             w_loc_vel=10.0,
@@ -101,7 +100,7 @@ class DecompressorTrainer(object):
             weight_decay=0.001
         )
 
-        device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+        device = dataset.device()
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
         parents = dataset.skeleton().parents()
         fps = dataset.fps()
@@ -109,74 +108,82 @@ class DecompressorTrainer(object):
         sequences = all_sequences_of_dataset(dataset)
         batches = self.prepare_batches(dataset, sequences, batch_size, window)
 
-        Y_mean = torch.tensor(dataset.Y_mean, dtype=torch.float32).to(device)
         Y_decompressor_scale = torch.tensor(dataset.Y_decompressor_scale, dtype=torch.float32).to(device)
 
+        Y_mean = torch.tensor(dataset.Y_mean, dtype=torch.float32).to(device)
+        Q_mean = torch.tensor(dataset.Q_mean, dtype=torch.float32).to(device)
+        compressor_mean = torch.cat([Y_mean, Q_mean], dim=-1)
+
+        Y_compressor_scale = torch.tensor(dataset.Y_compressor_scale, dtype=torch.float32).to(device)
+        Q_compressor_scale = torch.tensor(dataset.Q_compressor_scale, dtype=torch.float32).to(device)
+        compressor_scale = torch.cat([Y_compressor_scale, Q_compressor_scale], dim=-1)
+
+        rolling_loss = None
         for epoch in range(epochs):
             optimizer.zero_grad()
 
             (x, y, q,
-             Ygnd_pos, Ygnd_txy, Ygnd_vel, Ygnd_ang, Ygnd_rvel, Ygnd_rang,
-             Qgnd_pos, Qgnd_vel, Qgnd_ang, Qgnd_xfm) = next(batches)
+             y_gnd_pos, y_gnd_txy, y_gnd_vel, y_gnd_ang, y_gnd_rvel, y_gnd_rang,
+             q_gnd_pos, q_gnd_vel, q_gnd_ang, q_gnd_xfm) = next(batches)
             x = torch.tensor(x).to(device)
             y = torch.tensor(y).to(device)
             q = torch.tensor(q).to(device)
-            Ygnd_pos = torch.tensor(Ygnd_pos).to(device)
-            Ygnd_txy = torch.tensor(Ygnd_txy).to(device)
-            Ygnd_vel = torch.tensor(Ygnd_vel).to(device)
-            Ygnd_ang = torch.tensor(Ygnd_ang).to(device)
-            Ygnd_rvel = torch.tensor(Ygnd_rvel).to(device)
-            Ygnd_rang = torch.tensor(Ygnd_rang).to(device)
-            Qgnd_pos = torch.tensor(Qgnd_pos).to(device)
-            Qgnd_vel = torch.tensor(Qgnd_vel).to(device)
-            Qgnd_ang = torch.tensor(Qgnd_ang).to(device)
-            Qgnd_xfm = torch.tensor(Qgnd_xfm).to(device)
+            y_gnd_pos = torch.tensor(y_gnd_pos).to(device)
+            y_gnd_txy = torch.tensor(y_gnd_txy).to(device)
+            y_gnd_vel = torch.tensor(y_gnd_vel).to(device)
+            y_gnd_ang = torch.tensor(y_gnd_ang).to(device)
+            y_gnd_rvel = torch.tensor(y_gnd_rvel).to(device)
+            y_gnd_rang = torch.tensor(y_gnd_rang).to(device)
+            q_gnd_pos = torch.tensor(q_gnd_pos).to(device)
+            q_gnd_vel = torch.tensor(q_gnd_vel).to(device)
+            q_gnd_ang = torch.tensor(q_gnd_ang).to(device)
+            q_gnd_xfm = torch.tensor(q_gnd_xfm).to(device)
 
             # encode
-            z = compressor((torch.cat([y, q], dim=-1)))    # y and q have been normalized
+            z = compressor((torch.cat([y, q], dim=-1) - compressor_mean) / compressor_scale)
             # decode
             y_out = decompressor((torch.cat([x, z], dim=-1))) * Y_decompressor_scale + Y_mean
 
-            Ypos, Ytxy, Yvel, Yang, Yrvel, Yrang = extract_locomotion_from_y_feature_vector(y_out, batch_size, window)
-            Ypos = torch.cat([Ygnd_pos[:, :, 0:1], Ypos], dim=2)
-            Ytxy = torch.cat([Ygnd_txy[:, :, 0:1], Ytxy], dim=2)
-            Yvel = torch.cat([Ygnd_vel[:, :, 0:1], Yvel], dim=2)
-            Yang = torch.cat([Ygnd_ang[:, :, 0:1], Yang], dim=2)
+            y_pos, y_txy, y_vel, y_ang, y_rvel, y_rang = extract_locomotion_from_y_feature_vector(y_out, batch_size, window)
+            y_pos = torch.cat([y_gnd_pos[:, :, 0:1], y_pos], dim=2)
+            y_txy = torch.cat([y_gnd_txy[:, :, 0:1], y_txy], dim=2)
+            y_vel = torch.cat([y_gnd_vel[:, :, 0:1], y_vel], dim=2)
+            y_ang = torch.cat([y_gnd_ang[:, :, 0:1], y_ang], dim=2)
 
             # forward kinematics
-            Yxfm = from_xy(Ytxy)
-            Qxfm, Qpos, Qvel, Qang = fk_vel(Yxfm, Ypos, Yvel, Yang, parents)
+            y_xfm = from_xy(y_txy)
+            q_xfm, q_pos, q_vel, q_ang = fk_vel(y_xfm, y_pos, y_vel, y_ang, parents)
 
             # compute deltas
-            Ygnd_dpos = (Ygnd_pos[:, 1:] - Ygnd_pos[:, :-1]) * fps
-            Ygnd_drot = (Ygnd_txy[:, 1:] - Ygnd_txy[:, :-1]) * fps
-            Qgnd_dpos = (Qgnd_pos[:, 1:] - Qgnd_pos[:, :-1]) * fps
-            Qgnd_drot = (Qgnd_xfm[:, 1:] - Qgnd_xfm[:, :-1]) * fps
+            y_gnd_dpos = (y_gnd_pos[:, 1:] - y_gnd_pos[:, :-1]) * fps
+            y_gnd_drot = (y_gnd_txy[:, 1:] - y_gnd_txy[:, :-1]) * fps
+            q_gnd_dpos = (q_gnd_pos[:, 1:] - q_gnd_pos[:, :-1]) * fps
+            q_gnd_drot = (q_gnd_xfm[:, 1:] - q_gnd_xfm[:, :-1]) * fps
 
-            Ydpos = (Ypos[:, 1:] - Ypos[:, :-1]) * fps
-            Ydrot = (Ytxy[:, 1:] - Ytxy[:, :-1]) * fps
-            Qdpos = (Qpos[:, 1:] - Qpos[:, :-1]) * fps
-            Qdrot = (Qxfm[:, 1:] - Qxfm[:, :-1]) * fps
+            y_dpos = (y_pos[:, 1:] - y_pos[:, :-1]) * fps
+            y_drot = (y_txy[:, 1:] - y_txy[:, :-1]) * fps
+            q_dpos = (q_pos[:, 1:] - q_pos[:, :-1]) * fps
+            q_drot = (q_xfm[:, 1:] - q_xfm[:, :-1]) * fps
 
             dz = (z[:, 1:] - z[:, :-1]) * fps
 
             # compute losses
-            loss_loc_pos = torch.mean(torch.abs(Ygnd_pos - Ypos))
-            loss_loc_txy = torch.mean(torch.abs(Ygnd_txy - Ytxy))
-            loss_loc_vel = torch.mean(torch.abs(Ygnd_vel - Yvel))
-            loss_loc_ang = torch.mean(torch.abs(Ygnd_ang - Yang))
-            loss_loc_rvel = torch.mean(torch.abs(Ygnd_rvel - Yrvel))
-            loss_loc_rang = torch.mean(torch.abs(Ygnd_rang - Yrang))
+            loss_loc_pos = torch.mean(torch.abs(y_gnd_pos - y_pos))
+            loss_loc_txy = torch.mean(torch.abs(y_gnd_txy - y_txy))
+            loss_loc_vel = torch.mean(torch.abs(y_gnd_vel - y_vel))
+            loss_loc_ang = torch.mean(torch.abs(y_gnd_ang - y_ang))
+            loss_loc_rvel = torch.mean(torch.abs(y_gnd_rvel - y_rvel))
+            loss_loc_rang = torch.mean(torch.abs(y_gnd_rang - y_rang))
 
-            loss_chr_pos = torch.mean(torch.abs(Qgnd_pos - Qpos))
-            loss_chr_xfm = torch.mean(torch.abs(Qgnd_xfm - Qxfm))
-            loss_chr_vel = torch.mean(torch.abs(Qgnd_vel - Qvel))
-            loss_chr_ang = torch.mean(torch.abs(Qgnd_ang - Qang))
+            loss_chr_pos = torch.mean(torch.abs(q_gnd_pos - q_pos))
+            loss_chr_xfm = torch.mean(torch.abs(q_gnd_xfm - q_xfm))
+            loss_chr_vel = torch.mean(torch.abs(q_gnd_vel - q_vel))
+            loss_chr_ang = torch.mean(torch.abs(q_gnd_ang - q_ang))
 
-            loss_lvel_pos = torch.mean(torch.abs(Ygnd_dpos - Ydpos))
-            loss_lvel_rot = torch.mean(torch.abs(Ygnd_drot - Ydrot))
-            loss_cvel_pos = torch.mean(torch.abs(Qgnd_dpos - Qdpos))
-            loss_cvel_rot = torch.mean(torch.abs(Qgnd_drot - Qdrot))
+            loss_lvel_pos = torch.mean(torch.abs(y_gnd_dpos - y_dpos))
+            loss_lvel_rot = torch.mean(torch.abs(y_gnd_drot - y_drot))
+            loss_cvel_pos = torch.mean(torch.abs(q_gnd_dpos - q_dpos))
+            loss_cvel_rot = torch.mean(torch.abs(q_gnd_drot - q_drot))
 
             loss_sreg = torch.mean(torch.abs(z))
             loss_lreg = torch.mean(torch.square(z))
@@ -207,14 +214,20 @@ class DecompressorTrainer(object):
             loss.backward()
             optimizer.step()
 
+            if rolling_loss is None:
+                rolling_loss = loss.item()
+            else:
+                rolling_loss = rolling_loss * 0.99 + loss.item() * 0.01
+
             # logging
             if epoch % 10 == 0:
-                sys.stdout.write('\rIter: %7i Loss: %5.3f' % (epoch, loss.item()))
+                sys.stdout.write('\rIter: %7i Loss: %5.3f' % (epoch, rolling_loss))
 
-            if epoch % 1000 == 0:
-                generate_animation(dataset, dataset['S1']['jog_1_d0'], compressor, decompressor, device)
+            # if epoch % 1000 == 0:
+            #     generate_animation(dataset, dataset['S1']['jog_1_d0'], compressor, decompressor, device)
 
             if epoch % 1000 == 0:
                 scheduler.step()
 
+        sys.stdout.write('\n')
         return compressor, decompressor
