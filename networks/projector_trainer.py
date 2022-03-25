@@ -6,6 +6,7 @@ from common.locomotion_utils import nearest_frame
 
 import numpy as np
 import torch
+from sklearn.neighbors import BallTree
 
 import sys
 
@@ -16,29 +17,33 @@ class ProjectorTrainer(BaseTrainer):
         self.hidden_size = hidden_size
 
     @staticmethod
-    def prepare_batches(dataset, sequences, batch_size):
+    def get_all_x_z_from_dataset(dataset):
+        X = np.zeros((dataset.n_total_frames, utils.X_LEN), dtype=np.float32)
+        Z = np.zeros((dataset.n_total_frames, utils.Z_LEN), dtype=np.float32)
+        offset = 0
+        for subject in dataset.subjects():
+            for action in dataset[subject].values():
+                X[offset:offset+action['n_frames']] = action['input_feature']
+                Z[offset:offset+action['n_frames']] = action['Z_code']
+        # or we can do this:
+        # X = [action['input_feature'] for subject in dataset.subjects() for action in dataset[subject].values()]
+        # X = np.concatenate(X, axis=0)
+        return X, Z
+
+    @staticmethod
+    def prepare_batches(X, batch_size):
+        n_total_frames = X.shape[0]
         buffer_x = np.zeros((batch_size, utils.X_LEN), dtype=np.float32)
 
-        probs = []
-        for i, (subject, action) in enumerate(sequences):
-            probs.append(dataset[subject][action]['n_frames'])
-        probs = np.array(probs) / np.sum(probs)
-
         while True:
-            idxs = np.random.choice(len(sequences), size=batch_size, replace=True, p=probs)
-            # randomly pick batch_size pairs of frames
-
-            for i, (subject, action) in enumerate(sequences[idxs]):
-                action = dataset[subject][action]
-                frame = np.random.randint(0, action['n_frames'] - 1)
-                # add noise
-                n_sigma = np.random.uniform()
-                n = np.random.normal(size=utils.X_LEN)
-                buffer_x[i] = action['input_feature'][frame] + n_sigma * n
+            idxs = np.random.choice(n_total_frames, size=batch_size)
+            n_sigma = np.random.uniform(size=(batch_size, 1))
+            n = np.random.normal(size=(batch_size, utils.X_LEN))
+            buffer_x[:] = X[idxs] + n_sigma * n
             yield buffer_x
 
     def train(
-            self, dataset, batch_size=32, epochs=1000, lr=0.001, seed=0,
+            self, dataset, batch_size=32, epochs=10000, lr=0.001, seed=0,
             w_xval=1.0,
             w_zval=5.0,
             w_dist=0.3
@@ -58,34 +63,35 @@ class ProjectorTrainer(BaseTrainer):
 
         device = dataset.device()
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
-        fps = dataset.fps()
 
-        sequences = all_sequences_of_dataset(dataset)
-        batches = self.prepare_batches(dataset, sequences, batch_size)
+        X, Z = self.get_all_x_z_from_dataset(dataset)
+        batches = self.prepare_batches(X, batch_size)
+        search_tree = BallTree(X)
 
-        projector_mean_in = torch.tensor(dataset.projector_mean_in, dtype=torch.float32).to(device)
-        projector_std_in = torch.tensor(dataset.projector_std_in, dtype=torch.float32).to(device)
-        projector_mean_out = torch.tensor(dataset.projector_mean_out, dtype=torch.float32).to(device)
-        projector_std_out = torch.tensor(dataset.projector_std_out, dtype=torch.float32).to(device)
+        projector_mean_in = torch.as_tensor(dataset.projector_mean_in, dtype=torch.float32, device=device)
+        projector_std_in = torch.as_tensor(dataset.projector_std_in, dtype=torch.float32, device=device)
+        projector_mean_out = torch.as_tensor(dataset.projector_mean_out, dtype=torch.float32, device=device)
+        projector_std_out = torch.as_tensor(dataset.projector_std_out, dtype=torch.float32, device=device)
 
         rolling_loss = None
         for epoch in range(epochs):
             optimizer.zero_grad()
 
-            x_in = next(batches)
-            nearest_x, nearest_z = nearest_frame(dataset, x_in)
-            x_in = torch.tensor(x_in).to(device)
-            nearest_x = torch.tensor(nearest_x, dtype=torch.float32).to(device)
-            nearest_z = torch.tensor(nearest_z, dtype=torch.float32).to(device)
+            x_hat = next(batches)
+            nearest_idx = search_tree.query(x_hat, k=1, return_distance=False)[:, 0]
+            nearest_x = torch.as_tensor(X[nearest_idx], dtype=torch.float32, device=device)
+            nearest_z = torch.as_tensor(Z[nearest_idx], dtype=torch.float32, device=device)
+            x_hat = torch.as_tensor(x_hat, dtype=torch.float32, device=device)
 
-            x_z_out = (projector((x_in - projector_mean_in) / projector_std_in)
+            x_z_out = (projector((x_hat - projector_mean_in) / projector_std_in)
                        * projector_std_out + projector_mean_out)
             x_out = x_z_out[:, :utils.X_LEN]
             z_out = x_z_out[:, utils.X_LEN:]
 
             loss_xval = torch.mean(torch.abs(nearest_x - x_out))
             loss_zval = torch.mean(torch.abs(nearest_z - z_out))
-            loss_dist = torch.mean(torch.abs(torch.square(x_in - nearest_x) - torch.square(x_in - x_out)))
+            loss_dist = torch.mean(torch.abs(torch.sum(torch.square(x_hat - nearest_x), dim=-1) -
+                                             torch.sum(torch.square(x_hat - x_out), dim=-1)))
 
             loss = (
                 loss_xval * w_xval +
