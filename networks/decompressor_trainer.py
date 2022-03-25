@@ -1,5 +1,4 @@
-import sys
-
+from networks.base_trainer import BaseTrainer
 from networks.learned_motion_AE import Compressor, Decompressor
 from networks.utils import extract_locomotion_from_y_feature_vector, all_sequences_of_dataset
 from common.quaternion import from_xy, fk_vel
@@ -8,9 +7,12 @@ import common.locomotion_utils as utils
 import numpy as np
 import torch
 
+import sys
 
-class DecompressorTrainer(object):
+
+class DecompressorTrainer(BaseTrainer):
     def __init__(self, compressor_hidden_size=512, decompressor_hidden_size=512):
+        super().__init__()
         self.compressor_hidden_size = compressor_hidden_size
         self.decompressor_hidden_size = decompressor_hidden_size
 
@@ -65,13 +67,13 @@ class DecompressorTrainer(object):
 
     @staticmethod
     def get_compressor_mean_and_scale(dataset, device):
-        Y_mean = torch.tensor(dataset.Y_mean, dtype=torch.float32).to(device)
-        Q_mean = torch.tensor(dataset.Q_mean, dtype=torch.float32).to(device)
-        compressor_mean = torch.cat([Y_mean, Q_mean], dim=-1)
+        y_mean = torch.tensor(dataset.Y_mean, dtype=torch.float32).to(device)
+        q_mean = torch.tensor(dataset.Q_mean, dtype=torch.float32).to(device)
+        compressor_mean = torch.cat([y_mean, q_mean], dim=-1)
 
-        Y_compressor_scale = torch.tensor(dataset.Y_compressor_scale, dtype=torch.float32).to(device)
-        Q_compressor_scale = torch.tensor(dataset.Q_compressor_scale, dtype=torch.float32).to(device)
-        compressor_scale = torch.cat([Y_compressor_scale, Q_compressor_scale], dim=-1)
+        y_compressor_scale = torch.tensor(dataset.Y_compressor_scale, dtype=torch.float32).to(device)
+        q_compressor_scale = torch.tensor(dataset.Q_compressor_scale, dtype=torch.float32).to(device)
+        compressor_scale = torch.cat([y_compressor_scale, q_compressor_scale], dim=-1)
 
         return compressor_mean, compressor_scale
 
@@ -224,15 +226,12 @@ class DecompressorTrainer(object):
             else:
                 rolling_loss = rolling_loss * 0.99 + loss.item() * 0.01
 
+            if epoch % 1000 == 0:
+                scheduler.step()
+
             # logging
             if epoch % 10 == 0:
                 sys.stdout.write('\rIter: %7i Loss: %5.3f' % (epoch, rolling_loss))
-
-            # if epoch % 1000 == 0:
-            #     generate_animation(dataset, dataset['S1']['jog_1_d0'], compressor, decompressor, device)
-
-            if epoch % 1000 == 0:
-                scheduler.step()
 
         sys.stdout.write('\n')
         return compressor, decompressor

@@ -52,3 +52,20 @@ class Stepper(nn.Module):
         x = F.relu(self.linear1(x))
         x = self.linear2(x)
         return x.reshape((n_batch, n_window, -1))
+
+class Projector(nn.Module):
+    def __init__(self, input_size, output_size, hidden_size=512):
+        super().__init__()
+
+        self.linear0 = nn.Linear(input_size, hidden_size)
+        self.linear1 = nn.Linear(hidden_size, hidden_size)
+        self.linear2 = nn.Linear(hidden_size, hidden_size)
+        self.linear3 = nn.Linear(hidden_size, hidden_size)
+        self.linear4 = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        x = F.relu(self.linear0(x))
+        x = F.relu(self.linear1(x))
+        x = F.relu(self.linear2(x))
+        x = F.relu(self.linear3(x))
+        return self.linear4(x)

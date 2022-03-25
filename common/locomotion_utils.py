@@ -7,6 +7,7 @@
 import pickle
 
 import scipy.ndimage.filters
+import scipy.spatial
 import numpy as np
 import torch
 
@@ -288,50 +289,73 @@ def compute_z_vector(dataset, compressor):
     dataset.stepper_mean_out[X_LEN:] = dz_sum / (dataset.n_total_frames - n_actions)
     dataset.stepper_std_out[X_LEN:] = _std(dataset.stepper_mean_out[X_LEN:], dz_sum2, (dataset.n_total_frames - n_actions))
 
+    dataset.projector_mean_in = dataset.stepper_mean_in[:X_LEN]
+    dataset.projector_std_in = dataset.stepper_std_in[:X_LEN]
+    dataset.projector_mean_out = dataset.stepper_mean_in.copy()
+    dataset.projector_std_out = dataset.stepper_std_in.copy()
+
     with open('datasets/dataset_learned_motion.pkl', 'wb') as f:
         pickle.dump(dataset, f)
 
 
+def nearest_frame(dataset, x):
+    # return z and x vectors of that frame, instead of the frame index
+    # return shape (batch_size, X_LEN), (batch_size, Z_LEN)
+    batch_size = x.shape[0]
+    min_dist = np.ones(X_LEN) * np.inf
+    nearest_x = np.zeros((batch_size, X_LEN), dtype=np.float32)
+    nearest_z = np.zeros((batch_size, Z_LEN), dtype=np.float32)
+    for subject in dataset.subjects():
+        for action in dataset[subject].values():
+            dist = scipy.spatial.distance_matrix(action['input_feature'], x)    # batch_size * n_frames
+            local_min_idx = np.argmin(dist, axis=1)
+            local_min_dist = np.min(dist, axis=1)
+            nearest_x = np.where(local_min_dist < min_dist, action['input_feature'][local_min_idx], nearest_x)
+            nearest_z = np.where(local_min_dist < min_dist, action['Z_code'][local_min_idx], nearest_z)
+            min_dist = np.min(min_dist, local_min_dist)
+    return nearest_x, nearest_z
+
+
 def _build_output_vector_for_action(action, parents):
     n_frames = action['n_frames']
-    Y_feature = np.zeros((n_frames, Y_LEN), dtype=np.float32)
-    Q_feature = np.zeros((n_frames, Q_LEN), dtype=np.float32)
+    y_feature = np.zeros((n_frames, Y_LEN), dtype=np.float32)
+    q_feature = np.zeros((n_frames, Q_LEN), dtype=np.float32)
 
-    Ypos = action['positions_local']
-    Yrot = action['rotations']
-    Ytxy = action['rotations_txy']
-    Yvel = action['velocities_local']
-    Yang = action['angular_velocity']
-    Yrvel = qrot_inv_np(Yrot[:, 0], Yvel[:, 0])
-    Yrang = qrot_inv_np(Yrot[:, 0], Yang[:, 0])
-    action['Yrvel'] = Yrvel
-    action['Yrang'] = Yrang
+    y_pos = action['positions_local']
+    y_rot = action['rotations']
+    y_txy = action['rotations_txy']
+    y_vel = action['velocities_local']
+    y_ang = action['angular_velocity']
+    y_rvel = qrot_inv_np(y_rot[:, 0], y_vel[:, 0])
+    y_rang = qrot_inv_np(y_rot[:, 0], y_ang[:, 0])
+    action['Yrvel'] = y_rvel
+    action['Yrang'] = y_rang
 
-    Y_feature[:, 0:75] = Ypos[:, 1:].reshape((n_frames, -1))
-    Y_feature[:, 75:225] = Ytxy[:, 1:].reshape((n_frames, -1))
-    Y_feature[:, 225:300] = Yvel[:, 1:].reshape((n_frames, -1))
-    Y_feature[:, 300:375] = Yang[:, 1:].reshape((n_frames, -1))
-    Y_feature[:, 375:378] = Yrvel.reshape((n_frames, -1))
-    Y_feature[:, 378:381] = Yrang.reshape((n_frames, -1))
+    y_feature[:, 0:75] = y_pos[:, 1:].reshape((n_frames, -1))
+    y_feature[:, 75:225] = y_txy[:, 1:].reshape((n_frames, -1))
+    y_feature[:, 225:300] = y_vel[:, 1:].reshape((n_frames, -1))
+    y_feature[:, 300:375] = y_ang[:, 1:].reshape((n_frames, -1))
+    y_feature[:, 375:378] = y_rvel.reshape((n_frames, -1))
+    y_feature[:, 378:381] = y_rang.reshape((n_frames, -1))
 
     # Q
-    Qrot, Qpos, Qvel, Qang = fk_vel_np(Yrot, Ypos, Yvel, Yang, parents)
-    Qxfm = to_xform_np(Qrot)
+    q_rot, q_pos, q_vel, q_ang = fk_vel_np(y_rot, y_pos, y_vel, y_ang, parents)
+    q_xfm = to_xform_np(q_rot)
     # Qtxy = to_xform_xy_np(Qrot)
-    Qtxy = Qxfm[:, :, :, :2]
-    action['Qrot'] = Qrot.astype(np.float32)
-    action['Qpos'] = Qpos.astype(np.float32)
-    action['Qvel'] = Qvel.astype(np.float32)
-    action['Qang'] = Qang.astype(np.float32)
-    action['Qtxy'] = Qtxy.astype(np.float32)
-    action['Qxfm'] = Qxfm.astype(np.float32)
+    q_txy = q_xfm[:, :, :, :2]
+    action['Qrot'] = q_rot.astype(np.float32)
+    action['Qpos'] = q_pos.astype(np.float32)
+    action['Qvel'] = q_vel.astype(np.float32)
+    action['Qang'] = q_ang.astype(np.float32)
+    action['Qtxy'] = q_txy.astype(np.float32)
+    action['Qxfm'] = q_xfm.astype(np.float32)
 
-    Q_feature[:, 0:75] = Qpos[:, 1:].reshape((n_frames, -1))
-    Q_feature[:, 75:225] = Qtxy[:, 1:].reshape((n_frames, -1))
-    Q_feature[:, 225:300] = Qvel[:, 1:].reshape((n_frames, -1))
-    Q_feature[:, 300:375] = Qang[:, 1:].reshape((n_frames, -1))
+    q_feature[:, 0:75] = q_pos[:, 1:].reshape((n_frames, -1))
+    q_feature[:, 75:225] = q_txy[:, 1:].reshape((n_frames, -1))
+    q_feature[:, 225:300] = q_vel[:, 1:].reshape((n_frames, -1))
+    q_feature[:, 300:375] = q_ang[:, 1:].reshape((n_frames, -1))
 
-    return Y_feature, Q_feature
+    return y_feature, q_feature
 
 
 def compute_output_features(dataset):
@@ -343,31 +367,26 @@ def compute_output_features(dataset):
     dataset.Y_compressor_scale = np.zeros(Y_LEN)
     dataset.Q_compressor_scale = np.zeros(Q_LEN)
     # normalize
-    Y_sum = np.zeros(Y_LEN)
-    Y_sum2 = np.zeros(Y_LEN)
-    Q_sum = np.zeros(Q_LEN)
-    Q_sum2 = np.zeros(Q_LEN)
+    y_sum = np.zeros(Y_LEN)
+    y_sum2 = np.zeros(Y_LEN)
+    q_sum = np.zeros(Q_LEN)
+    q_sum2 = np.zeros(Q_LEN)
     for subject in dataset.subjects():
         for action in dataset[subject].values():
-            Y_sum += action['Y_feature'].sum(axis=0)
-            Y_sum2 += (action['Y_feature'] ** 2).sum(axis=0)
-            Q_sum += action['Q_feature'].sum(axis=0)
-            Q_sum2 += (action['Q_feature'] ** 2).sum(axis=0)
-    dataset.Y_mean = Y_sum / dataset.n_total_frames
-    dataset.Q_mean = Q_sum / dataset.n_total_frames
+            y_sum += action['Y_feature'].sum(axis=0)
+            y_sum2 += (action['Y_feature'] ** 2).sum(axis=0)
+            q_sum += action['Q_feature'].sum(axis=0)
+            q_sum2 += (action['Q_feature'] ** 2).sum(axis=0)
+    dataset.Y_mean = y_sum / dataset.n_total_frames
+    dataset.Q_mean = q_sum / dataset.n_total_frames
     for start, end in zip(Y_OFFSETS, Y_OFFSETS[1:]):
-        std = _std_with_range(Y_sum, Y_sum2, dataset.n_total_frames, start, end)
+        std = _std_with_range(y_sum, y_sum2, dataset.n_total_frames, start, end)
         dataset.Y_compressor_scale[start:end] = std
     for start, end in zip(Q_OFFSETS, Q_OFFSETS[1:]):
-        std = _std_with_range(Q_sum, Q_sum2, dataset.n_total_frames, start, end)
+        std = _std_with_range(q_sum, q_sum2, dataset.n_total_frames, start, end)
         dataset.Q_compressor_scale[start:end] = std
-    dataset.Y_decompressor_scale = _std(mean=dataset.Y_mean, sum2=Y_sum2, n=dataset.n_total_frames).astype(np.float32)
-    dataset.Q_decompressor_scale = _std(mean=dataset.Q_mean, sum2=Q_sum2, n=dataset.n_total_frames).astype(np.float32)
-
-    # for subject in dataset.subjects():
-    #     for action in dataset[subject].values():
-    #         action['Y_feature'] = ((action['Y_feature'] - dataset.Y_mean) / dataset.Y_compressor_scale).astype(np.float32)
-    #         action['Q_feature'] = ((action['Q_feature'] - dataset.Q_mean) / dataset.Q_compressor_scale).astype(np.float32)
+    dataset.Y_decompressor_scale = _std(mean=dataset.Y_mean, sum2=y_sum2, n=dataset.n_total_frames).astype(np.float32)
+    dataset.Q_decompressor_scale = _std(mean=dataset.Q_mean, sum2=q_sum2, n=dataset.n_total_frames).astype(np.float32)
 
 
 def angle_difference_batch(y, x):

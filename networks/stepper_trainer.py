@@ -1,5 +1,6 @@
 import sys
 
+from networks.base_trainer import BaseTrainer
 from networks.learned_motion_AE import Stepper
 from networks.utils import all_sequences_of_dataset
 import common.locomotion_utils as utils
@@ -8,8 +9,9 @@ import numpy as np
 import torch
 
 
-class StepperTrainer(object):
+class StepperTrainer(BaseTrainer):
     def __init__(self, compressor, hidden_size=512):
+        super().__init__()
         self.compressor = compressor
         self.hidden_size = hidden_size
 
@@ -105,12 +107,12 @@ class StepperTrainer(object):
             else:
                 rolling_loss = rolling_loss * 0.99 + loss.item() * 0.01
 
+            if epoch % 1000 == 0:
+                scheduler.step()
+
             # logging
             if epoch % 10 == 0:
                 sys.stdout.write('\rIter: %7i Loss: %5.3f' % (epoch, rolling_loss))
-
-            if epoch % 1000 == 0:
-                scheduler.step()
 
         sys.stdout.write('\n')
         return stepper

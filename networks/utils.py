@@ -4,6 +4,7 @@ import numpy as np
 COMPRESSOR_PATH = 'models/compressor.mdl'
 DECOMPRESSOR_PATH = 'models/decompressor.mdl'
 STEPPER_PATH = 'models/stepper.mdl'
+PROJECTOR_PATH = 'models/projector.mdl'
 
 
 def extract_locomotion_from_y_feature_vector(y, batch_size, window):

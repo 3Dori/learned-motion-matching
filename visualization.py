@@ -15,7 +15,7 @@ from matplotlib import pyplot as plt
 
 from common.dataset_locomotion import load_dataset
 from common.quaternion import qrot_np, qmul_np, from_scaled_angle_axis_np, qeuler_np, from_xform_xy_np, to_euler_np
-from networks.train_decompressor import DecompressorTrainer
+from networks.decompressor_trainer import DecompressorTrainer
 from networks.utils import extract_locomotion_from_y_feature_vector, COMPRESSOR_PATH, DECOMPRESSOR_PATH, STEPPER_PATH
 
 
