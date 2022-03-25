@@ -59,10 +59,10 @@ class StepperTrainer(BaseTrainer):
         sequences = all_sequences_of_dataset(dataset)
         batches = self.prepare_batches(dataset, sequences, batch_size, window)
 
-        stepper_mean_in = torch.tensor(dataset.stepper_mean_in, dtype=torch.float32).to(device)
-        stepper_std_in = torch.tensor(dataset.stepper_std_in, dtype=torch.float32).to(device)
-        stepper_mean_out = torch.tensor(dataset.stepper_mean_out, dtype=torch.float32).to(device)
-        stepper_std_out = torch.tensor(dataset.stepper_std_out, dtype=torch.float32).to(device)
+        stepper_mean_in = torch.as_tensor(dataset.stepper_mean_in, dtype=torch.float32, device=device)
+        stepper_std_in = torch.as_tensor(dataset.stepper_std_in, dtype=torch.float32, device=device)
+        stepper_mean_out = torch.as_tensor(dataset.stepper_mean_out, dtype=torch.float32, device=device)
+        stepper_std_out = torch.as_tensor(dataset.stepper_std_out, dtype=torch.float32, device=device)
 
         rolling_loss = None
         for epoch in range(epochs):
