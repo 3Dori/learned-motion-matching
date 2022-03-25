@@ -17,7 +17,7 @@ class ProjectorTrainer(BaseTrainer):
 
     @staticmethod
     def prepare_batches(dataset, sequences, batch_size):
-        buffer_x = np.zeros((batch_size, utils.X_LEN))
+        buffer_x = np.zeros((batch_size, utils.X_LEN), dtype=np.float32)
 
         probs = []
         for i, (subject, action) in enumerate(sequences):
@@ -38,7 +38,7 @@ class ProjectorTrainer(BaseTrainer):
             yield buffer_x
 
     def train(
-            self, dataset, batch_size=32, epochs=100000, lr=0.001, seed=0,
+            self, dataset, batch_size=32, epochs=1000, lr=0.001, seed=0,
             w_xval=1.0,
             w_zval=5.0,
             w_dist=0.3
@@ -78,7 +78,8 @@ class ProjectorTrainer(BaseTrainer):
             nearest_x = torch.tensor(nearest_x, dtype=torch.float32).to(device)
             nearest_z = torch.tensor(nearest_z, dtype=torch.float32).to(device)
 
-            x_z_out = projector(x_in)
+            x_z_out = (projector((x_in - projector_mean_in) / projector_std_in)
+                       * projector_std_out + projector_mean_out)
             x_out = x_z_out[:, :utils.X_LEN]
             z_out = x_z_out[:, utils.X_LEN:]
 
@@ -106,5 +107,5 @@ class ProjectorTrainer(BaseTrainer):
             if epoch % 10 == 0:
                 sys.stdout.write('\rIter: %7i Loss: %5.3f' % (epoch, rolling_loss))
 
-            sys.stdout.write('\n')
-            return projector
+        sys.stdout.write('\n')
+        return projector

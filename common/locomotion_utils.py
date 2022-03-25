@@ -302,17 +302,16 @@ def nearest_frame(dataset, x):
     # return z and x vectors of that frame, instead of the frame index
     # return shape (batch_size, X_LEN), (batch_size, Z_LEN)
     batch_size = x.shape[0]
-    min_dist = np.ones(X_LEN) * np.inf
+    min_dist = np.ones(batch_size, dtype=np.float32) * np.inf
     nearest_x = np.zeros((batch_size, X_LEN), dtype=np.float32)
     nearest_z = np.zeros((batch_size, Z_LEN), dtype=np.float32)
     for subject in dataset.subjects():
         for action in dataset[subject].values():
-            dist = scipy.spatial.distance_matrix(action['input_feature'], x)    # batch_size * n_frames
+            dist = scipy.spatial.distance_matrix(x, action['input_feature'])    # batch_size * n_frames
             local_min_idx = np.argmin(dist, axis=1)
             local_min_dist = np.min(dist, axis=1)
-            nearest_x = np.where(local_min_dist < min_dist, action['input_feature'][local_min_idx], nearest_x)
-            nearest_z = np.where(local_min_dist < min_dist, action['Z_code'][local_min_idx], nearest_z)
-            min_dist = np.min(min_dist, local_min_dist)
+            nearest_x[local_min_dist < min_dist] = action['input_feature'][local_min_idx]
+            nearest_z[local_min_dist < min_dist] = action['Z_code'][local_min_idx]
     return nearest_x, nearest_z
 
 
