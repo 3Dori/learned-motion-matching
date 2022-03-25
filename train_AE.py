@@ -16,7 +16,7 @@ if __name__ == '__main__':
     compressor = torch.load(COMPRESSOR_PATH)
     decompressor = torch.load(DECOMPRESSOR_PATH)
     print('Building Z vector')
-    compute_z_vector(dataset, compressor)
+    # compute_z_vector(dataset, compressor)
     print('Start training stepper')
     stepper_trainer = StepperTrainer(compressor)
     stepper = stepper_trainer.train(dataset)

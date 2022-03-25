@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 #
+import pickle
 
 import scipy.ndimage.filters
 import numpy as np
@@ -236,10 +237,6 @@ def compute_input_features(dataset):
         std = input_std[start:end].mean()
         dataset.decompressor_scale[start:end] = std / weight
 
-    # for subject in dataset.subjects():
-    #     for action in dataset[subject].values():
-    #         action['input_feature'] = ((action['input_feature'] - dataset.decompressor_mean) / dataset.decompressor_scale).astype(np.float32)
-
 
 def compute_z_vector(dataset, compressor):
     # generate z features
@@ -290,6 +287,9 @@ def compute_z_vector(dataset, compressor):
     dataset.stepper_std_out[:X_LEN] = _std(dataset.stepper_mean_out[:X_LEN], dx_sum2, (dataset.n_total_frames - n_actions))
     dataset.stepper_mean_out[X_LEN:] = dz_sum / (dataset.n_total_frames - n_actions)
     dataset.stepper_std_out[X_LEN:] = _std(dataset.stepper_mean_out[X_LEN:], dz_sum2, (dataset.n_total_frames - n_actions))
+
+    with open('datasets/dataset_learned_motion.pkl', 'wb') as f:
+        pickle.dump(dataset, f)
 
 
 def _build_output_vector_for_action(action, parents):

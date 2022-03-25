@@ -63,6 +63,18 @@ class DecompressorTrainer(object):
                    buffer_y_gnd_rang,
                    buffer_q_gnd_pos, buffer_q_gnd_vel, buffer_q_gnd_ang, buffer_q_gnd_xfm)
 
+    @staticmethod
+    def get_compressor_mean_and_scale(dataset, device):
+        Y_mean = torch.tensor(dataset.Y_mean, dtype=torch.float32).to(device)
+        Q_mean = torch.tensor(dataset.Q_mean, dtype=torch.float32).to(device)
+        compressor_mean = torch.cat([Y_mean, Q_mean], dim=-1)
+
+        Y_compressor_scale = torch.tensor(dataset.Y_compressor_scale, dtype=torch.float32).to(device)
+        Q_compressor_scale = torch.tensor(dataset.Q_compressor_scale, dtype=torch.float32).to(device)
+        compressor_scale = torch.cat([Y_compressor_scale, Q_compressor_scale], dim=-1)
+
+        return compressor_mean, compressor_scale
+
     def train(
             self, dataset, batch_size=32, window=2, epochs=100000, lr=0.001, seed=0,
             w_loc_pos=75.0,
@@ -109,14 +121,7 @@ class DecompressorTrainer(object):
         batches = self.prepare_batches(dataset, sequences, batch_size, window)
 
         Y_decompressor_scale = torch.tensor(dataset.Y_decompressor_scale, dtype=torch.float32).to(device)
-
-        Y_mean = torch.tensor(dataset.Y_mean, dtype=torch.float32).to(device)
-        Q_mean = torch.tensor(dataset.Q_mean, dtype=torch.float32).to(device)
-        compressor_mean = torch.cat([Y_mean, Q_mean], dim=-1)
-
-        Y_compressor_scale = torch.tensor(dataset.Y_compressor_scale, dtype=torch.float32).to(device)
-        Q_compressor_scale = torch.tensor(dataset.Q_compressor_scale, dtype=torch.float32).to(device)
-        compressor_scale = torch.cat([Y_compressor_scale, Q_compressor_scale], dim=-1)
+        compressor_mean, compressor_scale = self.get_compressor_mean_and_scale(dataset, device)
 
         rolling_loss = None
         for epoch in range(epochs):
