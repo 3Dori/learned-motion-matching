@@ -16,21 +16,17 @@ from matplotlib import pyplot as plt
 from common.dataset_locomotion import load_dataset
 from common.quaternion import qrot_np, qmul_np, from_scaled_angle_axis_np, qeuler_np, from_xform_xy_np, to_euler_np
 from networks.decompressor_trainer import DecompressorTrainer
-from networks.utils import extract_locomotion_from_y_feature_vector, COMPRESSOR_PATH, DECOMPRESSOR_PATH, STEPPER_PATH
+from networks.projector_trainer import ProjectorTrainer
+from networks.stepper_trainer import StepperTrainer
+from networks.utils import extract_locomotion_from_y_feature_vector, COMPRESSOR_PATH, DECOMPRESSOR_PATH, STEPPER_PATH, \
+    PROJECTOR_PATH
+from common.locomotion_utils import Y_LEN
 
 
-def render_decompressor_output_given_x_z(decompressor, x_z, dataset, action, n_frames):
-    device = dataset.device()
-    skeleton = dataset.skeleton()
-    fps = dataset.fps()
-
-    # Pass through decompressor
-    Y_mean = torch.tensor(dataset.Y_mean, dtype=torch.float32).to(device)
-    Y_decompressor_scale = torch.tensor(dataset.Y_decompressor_scale, dtype=torch.float32).to(device)
-    y_out = decompressor(x_z) * Y_decompressor_scale + Y_mean
-
+def render_Y(y, skeleton, fps, action):
     # Extract required components
-    y_pos, y_txy, y_vel, y_ang, y_rvel, y_rang = extract_locomotion_from_y_feature_vector(y_out, 1, n_frames)
+    y_pos, y_txy, y_vel, y_ang, y_rvel, y_rang = extract_locomotion_from_y_feature_vector(y, 1)
+    n_frames = y_pos.shape[1]
 
     # Convert to quat and remove batch
     y_rot = from_xform_xy_np(y_txy[0].cpu().numpy())
@@ -61,18 +57,16 @@ def generate_decompressor_animation():
     decompressor = torch.load(DECOMPRESSOR_PATH)
     with torch.no_grad():
         device = dataset.device()
-
-        compressor_mean, compressor_scale = DecompressorTrainer.get_compressor_mean_and_scale(dataset, device)
+        trainer = DecompressorTrainer(dataset)
 
         y = torch.tensor(action['Y_feature'][np.newaxis]).to(device)
         q = torch.tensor(action['Q_feature'][np.newaxis]).to(device)
         x = torch.tensor(action['input_feature'][np.newaxis]).to(device)
 
         # Pass through compressor
-        z = compressor((torch.cat([y, q], dim=-1) - compressor_mean) / compressor_scale)
-
-        x_z = torch.cat([x, z], dim=-1)
-        render_decompressor_output_given_x_z(decompressor, x_z, dataset, action, action['n_frames'])
+        z = trainer.compress(compressor, y, q)
+        y = trainer.decompress(decompressor, x, z)
+        render_Y(y, dataset.skeleton(), dataset.fps(), action)
 
 
 def generate_stepper_animation(n_frames=360):
@@ -82,27 +76,44 @@ def generate_stepper_animation(n_frames=360):
     stepper = torch.load(STEPPER_PATH)
     decompressor = torch.load(DECOMPRESSOR_PATH)
     with torch.no_grad():
-        fps = dataset.fps()
         device = dataset.device()
-
-        stepper_mean_in = torch.tensor(dataset.stepper_mean_in, dtype=torch.float32).to(device)
-        stepper_std_in = torch.tensor(dataset.stepper_std_in, dtype=torch.float32).to(device)
-        stepper_mean_out = torch.tensor(dataset.stepper_mean_out, dtype=torch.float32).to(device)
-        stepper_std_out = torch.tensor(dataset.stepper_std_out, dtype=torch.float32).to(device)
+        trainer = DecompressorTrainer(dataset)
 
         # compute first
-        x_first_frame = torch.tensor(action['input_feature'][0:1][np.newaxis]).to(device)
-        z_first_frame = torch.tensor(action['Z_code'][0:1][np.newaxis]).to(device)
+        x_first_frame = torch.as_tensor(action['input_feature'][0:1][np.newaxis], dtype=torch.float32, device=device)
+        z_first_frame = torch.as_tensor(action['Z_code'][0:1][np.newaxis], dtype=torch.float32, device=device)
         x_z = torch.cat([x_first_frame, z_first_frame], dim=-1)
+        predicted_x_z = StepperTrainer.predict_x_z(stepper, x_z)
+        y = trainer.decompress(decompressor, predicted_x_z)
 
-        predicted_x_z = [x_z]
-        for i in range(n_frames - 1):
-            delta_x_z = (stepper((predicted_x_z[-1] - stepper_mean_in) / stepper_std_in)
-                         * stepper_std_out + stepper_mean_out)
-            predicted_x_z.append(x_z[-1] + delta_x_z / fps)
-        predicted_x_z = torch.cat(predicted_x_z, dim=1)
+        render_Y(y, dataset.skeleton(), dataset.fps(), action)
 
-        render_decompressor_output_given_x_z(decompressor, predicted_x_z, dataset, action, n_frames)
+
+def generate_motion_matching_animation(projector_n_frames=10, simulate_n_frames=360):
+    dataset = load_dataset()
+    action = dataset['S1']['jog_1_d0']
+    device = dataset.device()
+
+    decompressor = torch.load(DECOMPRESSOR_PATH)
+    stepper = torch.load(STEPPER_PATH)
+    projector = torch.load(PROJECTOR_PATH)
+
+    y = torch.zeros((1, simulate_n_frames, Y_LEN), dtype=torch.float32, device=device)
+
+    with torch.no_grad():
+        projector_trainer = ProjectorTrainer(dataset)
+        stepper_trainer = StepperTrainer(dataset, compressor=None)
+        decompressor_trainer = DecompressorTrainer(dataset)
+
+        n_projects = simulate_n_frames // projector_n_frames    # number of projector callings
+        x = torch.as_tensor(action['input_feature'][0:1][np.newaxis], dtype=torch.float32, device=device)
+        for i in range(n_projects):
+            x_z = projector_trainer.project(projector, x)
+            predicted_x_z = stepper_trainer.predict_x_z(stepper, x_z, window=projector_n_frames)
+            y_out = decompressor_trainer.decompress(decompressor, predicted_x_z)
+            y[:, i*projector_n_frames:(i+1)*projector_n_frames] = y_out
+
+        render_Y(y, dataset.skeleton(), dataset.fps(), action)
 
 
 def render_animation(data, skeleton, fps, output='interactive', bitrate=1000):
@@ -212,4 +223,5 @@ def vis_skeleton(path, out_path_prefix, frames=(0, 10, 20, 30, 40, 50)):
 
 if __name__ == '__main__':
     # generate_decompressor_animation()
-    generate_stepper_animation()
+    # generate_stepper_animation()
+    generate_motion_matching_animation()

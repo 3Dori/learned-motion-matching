@@ -53,6 +53,7 @@ class Stepper(nn.Module):
         x = self.linear2(x)
         return x.reshape((n_batch, n_window, -1))
 
+
 class Projector(nn.Module):
     def __init__(self, input_size, output_size, hidden_size=512):
         super().__init__()

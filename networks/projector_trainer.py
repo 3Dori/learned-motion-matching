@@ -12,9 +12,16 @@ import sys
 
 
 class ProjectorTrainer(BaseTrainer):
-    def __init__(self, hidden_size=512):
+    def __init__(self, dataset, hidden_size=512):
         super().__init__()
+        self.dataset = dataset
         self.hidden_size = hidden_size
+
+        device = dataset.device()
+        self.projector_mean_in = torch.as_tensor(dataset.projector_mean_in, dtype=torch.float32, device=device)
+        self.projector_std_in = torch.as_tensor(dataset.projector_std_in, dtype=torch.float32, device=device)
+        self.projector_mean_out = torch.as_tensor(dataset.projector_mean_out, dtype=torch.float32, device=device)
+        self.projector_std_out = torch.as_tensor(dataset.projector_std_out, dtype=torch.float32, device=device)
 
     @staticmethod
     def get_all_x_z_from_dataset(dataset):
@@ -42,8 +49,12 @@ class ProjectorTrainer(BaseTrainer):
             buffer_x[:] = X[idxs] + n_sigma * n
             yield buffer_x
 
+    def project(self, projector, x_hat):
+        return (projector((x_hat - self.projector_mean_in) / self.projector_std_in)
+                * self.projector_std_out + self.projector_mean_out)
+
     def train(
-            self, dataset, batch_size=32, epochs=10000, lr=0.001, seed=0,
+            self, batch_size=32, epochs=100000, lr=0.001, seed=0,
             w_xval=1.0,
             w_zval=5.0,
             w_dist=0.3
@@ -61,17 +72,12 @@ class ProjectorTrainer(BaseTrainer):
             weight_decay=0.001
         )
 
-        device = dataset.device()
+        device = self.dataset.device()
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
 
-        X, Z = self.get_all_x_z_from_dataset(dataset)
+        X, Z = self.get_all_x_z_from_dataset(self.dataset)
         batches = self.prepare_batches(X, batch_size)
         search_tree = BallTree(X)
-
-        projector_mean_in = torch.as_tensor(dataset.projector_mean_in, dtype=torch.float32, device=device)
-        projector_std_in = torch.as_tensor(dataset.projector_std_in, dtype=torch.float32, device=device)
-        projector_mean_out = torch.as_tensor(dataset.projector_mean_out, dtype=torch.float32, device=device)
-        projector_std_out = torch.as_tensor(dataset.projector_std_out, dtype=torch.float32, device=device)
 
         rolling_loss = None
         for epoch in range(epochs):
@@ -83,8 +89,7 @@ class ProjectorTrainer(BaseTrainer):
             nearest_z = torch.as_tensor(Z[nearest_idx], dtype=torch.float32, device=device)
             x_hat = torch.as_tensor(x_hat, dtype=torch.float32, device=device)
 
-            x_z_out = (projector((x_hat - projector_mean_in) / projector_std_in)
-                       * projector_std_out + projector_mean_out)
+            x_z_out = self.project(projector, x_hat)
             x_out = x_z_out[:, :utils.X_LEN]
             z_out = x_z_out[:, utils.X_LEN:]
 
