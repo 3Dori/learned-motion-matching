@@ -1,8 +1,8 @@
 import sys
 
+from common.dataset_locomotion import get_valid_sequences
 from networks.base_trainer import BaseTrainer
 from networks.learned_motion_AE import Stepper
-from networks.utils import all_sequences_of_dataset
 import common.locomotion_utils as utils
 
 import numpy as np
@@ -10,17 +10,9 @@ import torch
 
 
 class StepperTrainer(BaseTrainer):
-    def __init__(self, dataset, compressor, hidden_size=512):
+    def __init__(self, hidden_size=512):
         super().__init__()
-        self.dataset = dataset
-        self.compressor = compressor
         self.hidden_size = hidden_size
-
-        device = dataset.device()
-        self.stepper_mean_in = torch.as_tensor(dataset.stepper_mean_in, dtype=torch.float32, device=device)
-        self.stepper_std_in = torch.as_tensor(dataset.stepper_std_in, dtype=torch.float32, device=device)
-        self.stepper_mean_out = torch.as_tensor(dataset.stepper_mean_out, dtype=torch.float32, device=device)
-        self.stepper_std_out = torch.as_tensor(dataset.stepper_std_out, dtype=torch.float32, device=device)
 
     @staticmethod
     def prepare_batches(dataset, sequences, batch_size, window):
@@ -41,16 +33,8 @@ class StepperTrainer(BaseTrainer):
                 buffer_x_z[i, :, utils.X_LEN:] = action['Z_code'][frame:frame+window]
             yield buffer_x_z
 
-    def predict_x_z(self, stepper, x_z, window):
-        predicted_x_z = [x_z[:, 0:1]]
-        for _ in range(window - 1):
-            delta_x_z = (stepper((predicted_x_z[-1] - self.stepper_mean_in) / self.stepper_std_in)
-                         * self.stepper_std_out + self.stepper_mean_out)
-            predicted_x_z.append(predicted_x_z[-1] + delta_x_z / self.dataset.fps())
-        return torch.cat(predicted_x_z, dim=1)
-
     def train(
-            self, batch_size=32, window=10, epochs=100000, lr=0.001, seed=0,
+            self, dataset, batch_size=32, window=20, epochs=100000, lr=0.001, seed=0,
             w_xval=2.0,
             w_zval=7.5,
             w_xvel=0.2,
@@ -59,7 +43,9 @@ class StepperTrainer(BaseTrainer):
         np.random.seed(seed)
         torch.manual_seed(seed)
 
-        stepper = Stepper(param_size=utils.X_LEN + utils.Z_LEN, hidden_size=self.hidden_size)
+        stepper = Stepper(dataset,
+                          param_size=utils.X_LEN + utils.Z_LEN,
+                          hidden_size=self.hidden_size)
         optimizer = torch.optim.AdamW(
             stepper.parameters(),
             lr=lr,
@@ -67,12 +53,12 @@ class StepperTrainer(BaseTrainer):
             weight_decay=0.001
         )
 
-        device = self.dataset.device()
+        device = dataset.device()
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
-        fps = self.dataset.fps()
+        fps = dataset.fps()
 
-        sequences = all_sequences_of_dataset(self.dataset)
-        batches = self.prepare_batches(self.dataset, sequences, batch_size, window)
+        sequences, _ = get_valid_sequences(dataset)
+        batches = self.prepare_batches(dataset, sequences, batch_size, window)
 
         rolling_loss = None
         for epoch in range(epochs):
@@ -80,7 +66,7 @@ class StepperTrainer(BaseTrainer):
 
             x_z = next(batches)    # batch_size * window * (len(x) + len(z))
             x_z = torch.tensor(x_z).to(device)
-            predicted_x_z = self.predict_x_z(stepper, x_z, window)
+            predicted_x_z = stepper.predict_x_z(x_z, window)
 
             x = x_z[:, :, :utils.X_LEN]
             z = x_z[:, :, utils.X_LEN:]

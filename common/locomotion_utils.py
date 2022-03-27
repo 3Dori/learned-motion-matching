@@ -299,6 +299,7 @@ def compute_z_vector(dataset, compressor):
 
 
 def nearest_frame(dataset, x):
+    # Don't use this function. Use BallTree instead.
     # return z and x vectors of that frame, instead of the frame index
     # return shape (batch_size, X_LEN), (batch_size, Z_LEN)
     batch_size = x.shape[0]
@@ -384,7 +385,7 @@ def compute_output_features(dataset):
     for start, end in zip(Q_OFFSETS, Q_OFFSETS[1:]):
         std = _std_with_range(q_sum, q_sum2, dataset.n_total_frames, start, end)
         dataset.Q_compressor_scale[start:end] = std
-    dataset.Y_decompressor_scale = _std(mean=dataset.Y_mean, sum2=y_sum2, n=dataset.n_total_frames).astype(np.float32)
+    dataset.y_scale = _std(mean=dataset.Y_mean, sum2=y_sum2, n=dataset.n_total_frames).astype(np.float32)
     dataset.Q_decompressor_scale = _std(mean=dataset.Q_mean, sum2=q_sum2, n=dataset.n_total_frames).astype(np.float32)
 
 

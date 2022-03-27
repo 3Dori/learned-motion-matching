@@ -1,8 +1,7 @@
+from common.dataset_locomotion import get_valid_sequences
 from networks.base_trainer import BaseTrainer
 from networks.learned_motion_AE import Projector
-from networks.utils import all_sequences_of_dataset
 import common.locomotion_utils as utils
-from common.locomotion_utils import nearest_frame
 
 import numpy as np
 import torch
@@ -12,26 +11,21 @@ import sys
 
 
 class ProjectorTrainer(BaseTrainer):
-    def __init__(self, dataset, hidden_size=512):
+    def __init__(self, hidden_size=512):
         super().__init__()
-        self.dataset = dataset
         self.hidden_size = hidden_size
 
-        device = dataset.device()
-        self.projector_mean_in = torch.as_tensor(dataset.projector_mean_in, dtype=torch.float32, device=device)
-        self.projector_std_in = torch.as_tensor(dataset.projector_std_in, dtype=torch.float32, device=device)
-        self.projector_mean_out = torch.as_tensor(dataset.projector_mean_out, dtype=torch.float32, device=device)
-        self.projector_std_out = torch.as_tensor(dataset.projector_std_out, dtype=torch.float32, device=device)
-
     @staticmethod
-    def get_all_x_z_from_dataset(dataset):
-        X = np.zeros((dataset.n_total_frames, utils.X_LEN), dtype=np.float32)
-        Z = np.zeros((dataset.n_total_frames, utils.Z_LEN), dtype=np.float32)
+    def get_valid_x_z_from_dataset(sequences):
+        n_total_frames = sum(action['n_frames'] for _, action in sequences)
+        X = np.zeros((n_total_frames, utils.X_LEN), dtype=np.float32)
+        Z = np.zeros((n_total_frames, utils.Z_LEN), dtype=np.float32)
         offset = 0
-        for subject in dataset.subjects():
-            for action in dataset[subject].values():
-                X[offset:offset+action['n_frames']] = action['input_feature']
-                Z[offset:offset+action['n_frames']] = action['Z_code']
+
+        for subject, action in sequences:
+            X[offset:offset+action['n_frames']] = action['input_feature']
+            Z[offset:offset+action['n_frames']] = action['Z_code']
+            offset += action['n_frames']
         # or we can do this:
         # X = [action['input_feature'] for subject in dataset.subjects() for action in dataset[subject].values()]
         # X = np.concatenate(X, axis=0)
@@ -49,12 +43,8 @@ class ProjectorTrainer(BaseTrainer):
             buffer_x[:] = X[idxs] + n_sigma * n
             yield buffer_x
 
-    def project(self, projector, x_hat):
-        return (projector((x_hat - self.projector_mean_in) / self.projector_std_in)
-                * self.projector_std_out + self.projector_mean_out)
-
     def train(
-            self, batch_size=32, epochs=100000, lr=0.001, seed=0,
+            self, dataset, batch_size=32, epochs=100000, lr=0.001, seed=0,
             w_xval=1.0,
             w_zval=5.0,
             w_dist=0.3
@@ -72,10 +62,11 @@ class ProjectorTrainer(BaseTrainer):
             weight_decay=0.001
         )
 
-        device = self.dataset.device()
+        device = dataset.device()
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
 
-        X, Z = self.get_all_x_z_from_dataset(self.dataset)
+        sequences, _ = get_valid_sequences(dataset)
+        X, Z = self.get_valid_x_z_from_dataset(sequences)
         batches = self.prepare_batches(X, batch_size)
         search_tree = BallTree(X)
 
@@ -89,7 +80,7 @@ class ProjectorTrainer(BaseTrainer):
             nearest_z = torch.as_tensor(Z[nearest_idx], dtype=torch.float32, device=device)
             x_hat = torch.as_tensor(x_hat, dtype=torch.float32, device=device)
 
-            x_z_out = self.project(projector, x_hat)
+            x_z_out = projector.project(x_hat)
             x_out = x_z_out[:, :utils.X_LEN]
             z_out = x_z_out[:, utils.X_LEN:]
 

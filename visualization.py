@@ -57,15 +57,14 @@ def generate_decompressor_animation():
     decompressor = torch.load(DECOMPRESSOR_PATH)
     with torch.no_grad():
         device = dataset.device()
-        trainer = DecompressorTrainer(dataset)
 
         y = torch.tensor(action['Y_feature'][np.newaxis]).to(device)
         q = torch.tensor(action['Q_feature'][np.newaxis]).to(device)
         x = torch.tensor(action['input_feature'][np.newaxis]).to(device)
 
         # Pass through compressor
-        z = trainer.compress(compressor, y, q)
-        y = trainer.decompress(decompressor, x, z)
+        z = compressor.compress(y, q)
+        y = decompressor.decompress(x, z)
         render_Y(y, dataset.skeleton(), dataset.fps(), action)
 
 
@@ -77,14 +76,13 @@ def generate_stepper_animation(n_frames=360):
     decompressor = torch.load(DECOMPRESSOR_PATH)
     with torch.no_grad():
         device = dataset.device()
-        trainer = DecompressorTrainer(dataset)
 
         # compute first
         x_first_frame = torch.as_tensor(action['input_feature'][0:1][np.newaxis], dtype=torch.float32, device=device)
         z_first_frame = torch.as_tensor(action['Z_code'][0:1][np.newaxis], dtype=torch.float32, device=device)
         x_z = torch.cat([x_first_frame, z_first_frame], dim=-1)
-        predicted_x_z = StepperTrainer.predict_x_z(stepper, x_z)
-        y = trainer.decompress(decompressor, predicted_x_z)
+        predicted_x_z = stepper.predict_x_z(x_z)
+        y = decompressor.decompress(predicted_x_z)
 
         render_Y(y, dataset.skeleton(), dataset.fps(), action)
 
@@ -101,16 +99,12 @@ def generate_motion_matching_animation(projector_n_frames=10, simulate_n_frames=
     y = torch.zeros((1, simulate_n_frames, Y_LEN), dtype=torch.float32, device=device)
 
     with torch.no_grad():
-        projector_trainer = ProjectorTrainer(dataset)
-        stepper_trainer = StepperTrainer(dataset, compressor=None)
-        decompressor_trainer = DecompressorTrainer(dataset)
-
         n_projects = simulate_n_frames // projector_n_frames    # number of projector callings
         x = torch.as_tensor(action['input_feature'][0:1][np.newaxis], dtype=torch.float32, device=device)
         for i in range(n_projects):
-            x_z = projector_trainer.project(projector, x)
-            predicted_x_z = stepper_trainer.predict_x_z(stepper, x_z, window=projector_n_frames)
-            y_out = decompressor_trainer.decompress(decompressor, predicted_x_z)
+            x_z = projector.project(x)
+            predicted_x_z = stepper.predict_x_z(x_z, window=projector_n_frames)
+            y_out = decompressor.decompress(predicted_x_z)
             y[:, i*projector_n_frames:(i+1)*projector_n_frames] = y_out
 
         render_Y(y, dataset.skeleton(), dataset.fps(), action)
