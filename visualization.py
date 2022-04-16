@@ -20,7 +20,7 @@ from networks.projector_trainer import ProjectorTrainer
 from networks.stepper_trainer import StepperTrainer
 from networks.utils import extract_locomotion_from_y_feature_vector, COMPRESSOR_PATH, DECOMPRESSOR_PATH, STEPPER_PATH, \
     PROJECTOR_PATH
-from common.locomotion_utils import Y_LEN
+from common.locomotion_utils import Y_LEN, X_LEN
 
 
 def render_Y(y, skeleton, fps, action):
@@ -68,26 +68,7 @@ def generate_decompressor_animation():
         render_Y(y, dataset.skeleton(), dataset.fps(), action)
 
 
-def generate_stepper_animation(n_frames=360):
-    dataset = load_dataset()
-    action = dataset['S1']['jog_1_d0']
-
-    stepper = torch.load(STEPPER_PATH)
-    decompressor = torch.load(DECOMPRESSOR_PATH)
-    with torch.no_grad():
-        device = dataset.device()
-
-        # compute first
-        x_first_frame = torch.as_tensor(action['input_feature'][0:1][np.newaxis], dtype=torch.float32, device=device)
-        z_first_frame = torch.as_tensor(action['Z_code'][0:1][np.newaxis], dtype=torch.float32, device=device)
-        x_z = torch.cat([x_first_frame, z_first_frame], dim=-1)
-        predicted_x_z = stepper.predict_x_z(x_z)
-        y = decompressor.decompress(predicted_x_z)
-
-        render_Y(y, dataset.skeleton(), dataset.fps(), action)
-
-
-def generate_motion_matching_animation(projector_n_frames=10, simulate_n_frames=360):
+def generate_motion_matching_animation(projector_n_frames=20, simulate_n_frames=360):
     dataset = load_dataset()
     action = dataset['S1']['jog_1_d0']
     device = dataset.device()
@@ -106,6 +87,7 @@ def generate_motion_matching_animation(projector_n_frames=10, simulate_n_frames=
             predicted_x_z = stepper.predict_x_z(x_z, window=projector_n_frames)
             y_out = decompressor.decompress(predicted_x_z)
             y[:, i*projector_n_frames:(i+1)*projector_n_frames] = y_out
+            x = predicted_x_z[:, -2:-1, :X_LEN]
 
         render_Y(y, dataset.skeleton(), dataset.fps(), action)
 

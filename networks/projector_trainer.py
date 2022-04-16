@@ -9,6 +9,8 @@ from sklearn.neighbors import BallTree
 
 import sys
 
+from networks.utils import PROJECTOR_PATH
+
 
 class ProjectorTrainer(BaseTrainer):
     def __init__(self, hidden_size=512):
@@ -16,13 +18,14 @@ class ProjectorTrainer(BaseTrainer):
         self.hidden_size = hidden_size
 
     @staticmethod
-    def get_valid_x_z_from_dataset(sequences):
-        n_total_frames = sum(action['n_frames'] for _, action in sequences)
+    def get_valid_x_z_from_dataset(dataset, sequences):
+        n_total_frames = sum(dataset[subject][action]['n_frames'] for subject, action in sequences)
         X = np.zeros((n_total_frames, utils.X_LEN), dtype=np.float32)
         Z = np.zeros((n_total_frames, utils.Z_LEN), dtype=np.float32)
         offset = 0
 
         for subject, action in sequences:
+            action = dataset[subject][action]
             X[offset:offset+action['n_frames']] = action['input_feature']
             Z[offset:offset+action['n_frames']] = action['Z_code']
             offset += action['n_frames']
@@ -44,7 +47,7 @@ class ProjectorTrainer(BaseTrainer):
             yield buffer_x
 
     def train(
-            self, dataset, batch_size=32, epochs=100000, lr=0.001, seed=0,
+            self, dataset, projector=None, batch_size=32, epochs=10000, lr=0.001, seed=0,
             w_xval=1.0,
             w_zval=5.0,
             w_dist=0.3
@@ -52,9 +55,11 @@ class ProjectorTrainer(BaseTrainer):
         np.random.seed(seed)
         torch.manual_seed(seed)
 
-        projector = Projector(input_size=utils.X_LEN,
-                              output_size=utils.X_LEN + utils.Z_LEN,
-                              hidden_size=self.hidden_size)
+        if projector is None:
+            projector = Projector(dataset,
+                                  input_size=utils.X_LEN,
+                                  output_size=utils.X_LEN + utils.Z_LEN,
+                                  hidden_size=self.hidden_size)
         optimizer = torch.optim.AdamW(
             projector.parameters(),
             lr=lr,
@@ -66,7 +71,7 @@ class ProjectorTrainer(BaseTrainer):
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
 
         sequences, _ = get_valid_sequences(dataset)
-        X, Z = self.get_valid_x_z_from_dataset(sequences)
+        X, Z = self.get_valid_x_z_from_dataset(dataset, sequences)
         batches = self.prepare_batches(X, batch_size)
         search_tree = BallTree(X)
 
@@ -108,6 +113,8 @@ class ProjectorTrainer(BaseTrainer):
             # logging
             if epoch % 10 == 0:
                 sys.stdout.write('\rIter: %7i Loss: %5.3f' % (epoch, rolling_loss))
+            if epoch % 1000 == 0:
+                torch.save(projector, PROJECTOR_PATH)
 
         sys.stdout.write('\n')
         return projector

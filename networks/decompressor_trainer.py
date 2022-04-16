@@ -1,7 +1,8 @@
 from common.dataset_locomotion import get_valid_sequences
 from networks.base_trainer import BaseTrainer
 from networks.learned_motion_AE import Compressor, Decompressor
-from networks.utils import extract_locomotion_from_y_feature_vector, all_sequences_of_dataset
+from networks.utils import extract_locomotion_from_y_feature_vector, all_sequences_of_dataset, COMPRESSOR_PATH, \
+    DECOMPRESSOR_PATH
 from common.quaternion import from_xy, fk_vel
 import common.locomotion_utils as utils
 
@@ -67,7 +68,7 @@ class DecompressorTrainer(BaseTrainer):
                    buffer_q_gnd_pos, buffer_q_gnd_vel, buffer_q_gnd_ang, buffer_q_gnd_xfm)
 
     def train(
-            self, dataset, batch_size=32, window=2, epochs=100000, lr=0.001, seed=0,
+            self, dataset, compressor=None, decompressor=None, batch_size=32, window=2, epochs=100000, lr=0.001, seed=0,
             w_loc_pos=75.0,
             w_loc_txy=10.0,
             w_loc_vel=10.0,
@@ -89,14 +90,16 @@ class DecompressorTrainer(BaseTrainer):
         np.random.seed(seed)
         torch.manual_seed(seed)
 
-        compressor = Compressor(dataset,
-                                input_size=utils.Y_LEN + utils.Q_LEN,
-                                output_size=utils.Z_LEN,
-                                hidden_size=self.compressor_hidden_size)
-        decompressor = Decompressor(dataset,
-                                    input_size=utils.X_LEN + utils.Z_LEN,
-                                    output_size=utils.Y_LEN,
-                                    hidden_size=self.decompressor_hidden_size)
+        if compressor is None:
+            compressor = Compressor(dataset,
+                                    input_size=utils.Y_LEN + utils.Q_LEN,
+                                    output_size=utils.Z_LEN,
+                                    hidden_size=self.compressor_hidden_size)
+        if decompressor is None:
+            decompressor = Decompressor(dataset,
+                                        input_size=utils.X_LEN + utils.Z_LEN,
+                                        output_size=utils.Y_LEN,
+                                        hidden_size=self.decompressor_hidden_size)
         optimizer = torch.optim.AdamW(
             list(compressor.parameters()) +
             list(decompressor.parameters()),
@@ -218,6 +221,9 @@ class DecompressorTrainer(BaseTrainer):
             # logging
             if epoch % 10 == 0:
                 sys.stdout.write('\rIter: %7i Loss: %5.3f' % (epoch, rolling_loss))
+            if epoch % 10000 == 0:
+                torch.save(compressor, COMPRESSOR_PATH)
+                torch.save(decompressor, DECOMPRESSOR_PATH)
 
         sys.stdout.write('\n')
         return compressor, decompressor

@@ -8,6 +8,8 @@ import common.locomotion_utils as utils
 import numpy as np
 import torch
 
+from networks.utils import STEPPER_PATH
+
 
 class StepperTrainer(BaseTrainer):
     def __init__(self, hidden_size=512):
@@ -34,7 +36,7 @@ class StepperTrainer(BaseTrainer):
             yield buffer_x_z
 
     def train(
-            self, dataset, batch_size=32, window=20, epochs=100000, lr=0.001, seed=0,
+            self, dataset, stepper=None, batch_size=32, window=20, epochs=100000, lr=0.001, seed=1234,
             w_xval=2.0,
             w_zval=7.5,
             w_xvel=0.2,
@@ -43,9 +45,10 @@ class StepperTrainer(BaseTrainer):
         np.random.seed(seed)
         torch.manual_seed(seed)
 
-        stepper = Stepper(dataset,
-                          param_size=utils.X_LEN + utils.Z_LEN,
-                          hidden_size=self.hidden_size)
+        if stepper is None:
+            stepper = Stepper(dataset,
+                              param_size=utils.X_LEN + utils.Z_LEN,
+                              hidden_size=self.hidden_size)
         optimizer = torch.optim.AdamW(
             stepper.parameters(),
             lr=lr,
@@ -105,6 +108,9 @@ class StepperTrainer(BaseTrainer):
             # logging
             if epoch % 10 == 0:
                 sys.stdout.write('\rIter: %7i Loss: %5.3f' % (epoch, rolling_loss))
+
+            if epoch % 10000 == 0:
+                torch.save(stepper, STEPPER_PATH)
 
         sys.stdout.write('\n')
         return stepper

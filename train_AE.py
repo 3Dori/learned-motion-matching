@@ -10,14 +10,14 @@ from common.dataset_locomotion import load_dataset
 
 if __name__ == '__main__':
     dataset = load_dataset()
-    print('Start training decompressor')
-    decompressor_trainer = DecompressorTrainer()
-    compressor, decompressor = decompressor_trainer.train(dataset)
-    torch.save(compressor, 'models/compressor.mdl')
-    torch.save(decompressor, 'models/decompressor.mdl')
-    # compressor = torch.load(COMPRESSOR_PATH)
-    # decompressor = torch.load(DECOMPRESSOR_PATH)
-    #
+    # print('Start training decompressor')
+    # decompressor_trainer = DecompressorTrainer()
+    # compressor, decompressor = decompressor_trainer.train(dataset)
+    # torch.save(compressor, COMPRESSOR_PATH)
+    # torch.save(decompressor, DECOMPRESSOR_PATH)
+    compressor = torch.load(COMPRESSOR_PATH)
+    decompressor = torch.load(DECOMPRESSOR_PATH)
+
     # print('Building Z vector')
     # compute_z_vector(dataset, compressor)
     # print('Start training stepper')
@@ -26,8 +26,8 @@ if __name__ == '__main__':
     # torch.save(stepper, STEPPER_PATH)
     # stepper = torch.load(STEPPER_PATH)
 
-    # print('Start training projector')
-    # projector_trainer = ProjectorTrainer()
-    # projector = projector_trainer.train(dataset)
-    # torch.save(projector, PROJECTOR_PATH)
+    print('Start training projector')
+    projector_trainer = ProjectorTrainer()
+    projector = projector_trainer.train(dataset)
+    torch.save(projector, PROJECTOR_PATH)
     print('Done')
